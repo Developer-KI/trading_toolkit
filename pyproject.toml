@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ventuals"
+version = "0.1.0"
+# This tells pip to look for your code
+dependencies = [
+    "streamlit",
+    "pandas",
+    "polars",
+    "python-dotenv",
+    "numpy",
+    "pyarrow",
+    "matplotlib",
+    "plotly",
+    "seaborn",
+    "playwright",
+    "beautifulsoup4",
+    "lxml",
+    "requests",
+    "transformers",
+    "torch",
+    "tqdm",
+    "telethon",
+    "pycld2",
+    "orjson",
+    "hyperliquid-python-sdk",
+    "websockets",
+    "binance-futures-connector"
+]
+[tool.setuptools]
+# 1. Map the root import path to the 'src' directory
+package-dir = {"" = "src"}
+
+# 2. Tell it to find all sub-packages (folders with __init__.py) inside 'src'
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,15 @@
+__pycache__
+.venv
+.vscode
+
+data/
+logs/
+build/
+
+**/p_* 
+*.png
+*.csv
+*.egg-info/
+
+.env
+resources.txt
