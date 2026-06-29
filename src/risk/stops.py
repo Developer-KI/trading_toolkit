@@ -1,20 +1,11 @@
 """
-stoploss.py — Modular stop-loss and take-profit framework.
+risk/stops.py — Modular stop-loss and take-profit framework.
 
-Each StopLoss is stateful per-position: call `on_entry()` when a position opens,
-`update()` on every bar, and `check()` to see if any exit triggered.
+Moved here from strategy/stoploss.py so the risk layer is independent of the
+strategy layer. strategy/stoploss.py now re-exports from here for backward
+compatibility.
 
-Usage:
-    from backtester.stoploss import TrailingATRStop, CompositeStopLoss
-
-    bt = Backtester(
-        signal=my_signal,
-        stop_loss=CompositeStopLoss([
-            TrailingATRStop(atr_mult=2.5),
-            TimeStop(max_bars=48),
-            BreakevenStop(activation_pct=1.5),
-        ]),
-    )
+Dependency: core/ only — no imports from strategy/ or execution/.
 """
 
 from __future__ import annotations
@@ -26,29 +17,25 @@ from typing import Any
 
 import pandas as pd
 
-from abstract.models import Position, Side, OrderBookSnapshot
+from core.models import Position, Side, OrderBookSnapshot
 
 
-# ── Stop result ──────────────────────────────────────────────────────────────
+# ── Stop result ───────────────────────────────────────────────────────────────
 
 
 @dataclass
 class StopResult:
-    """Returned by StopLoss.check() on every bar."""
-
     triggered: bool = False
     exit_price: float = 0.0
     reason: str = ""
     meta: dict[str, Any] = field(default_factory=dict)
 
 
-# ── Stop context (passed every bar) ─────────────────────────────────────────
+# ── Stop context ──────────────────────────────────────────────────────────────
 
 
 @dataclass
 class StopContext:
-    """All data a stop-loss might need on each bar."""
-
     position: Position
     bar_idx: int
     open: float
@@ -60,37 +47,30 @@ class StopContext:
     bar_data: dict[str, float] = field(default_factory=dict)
 
 
-# ── Abstract base ────────────────────────────────────────────────────────────
+# ── Abstract base ─────────────────────────────────────────────────────────────
 
 
 class StopLoss(abc.ABC):
     """
     Base class for stop-loss / take-profit strategies.
 
-    Lifecycle (called by the engine):
+    Lifecycle:
       1. on_entry(position, ctx) — initialize state when position opens
       2. update(ctx)             — update trailing levels on each bar
-      3. check(ctx) → StopResult — check if any exit is triggered
+      3. check(ctx) → StopResult — check if any exit triggered
       4. reset()                 — called when position closes
     """
 
     @abc.abstractmethod
-    def on_entry(self, position: Position, ctx: StopContext):
-        """Initialize stop state at position entry."""
-        ...
+    def on_entry(self, position: Position, ctx: StopContext): ...
 
     @abc.abstractmethod
-    def update(self, ctx: StopContext):
-        """Update dynamic levels (trailing, breakeven, etc.) each bar."""
-        ...
+    def update(self, ctx: StopContext): ...
 
     @abc.abstractmethod
-    def check(self, ctx: StopContext) -> StopResult:
-        """Check if stop triggered this bar.  Return StopResult."""
-        ...
+    def check(self, ctx: StopContext) -> StopResult: ...
 
     def reset(self):
-        """Reset internal state.  Override if you track state."""
         pass
 
     @property
@@ -106,17 +86,11 @@ class StopLoss(abc.ABC):
         return f"{self.__class__.__name__}({self.params})"
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Concrete stop-loss strategies
-# ═══════════════════════════════════════════════════════════════════════════
+# ── Concrete implementations ──────────────────────────────────────────────────
 
 
 class FixedPercentStop(StopLoss):
-    """
-    Fixed percentage stop-loss and optional take-profit from entry price.
-
-    SL at entry ± sl_pct%.  TP at entry ± tp_pct%.
-    """
+    """Fixed percentage stop-loss and optional take-profit from entry price."""
 
     def __init__(self, sl_pct: float = 2.0, tp_pct: float | None = None):
         self.sl_pct = sl_pct
@@ -140,36 +114,18 @@ class FixedPercentStop(StopLoss):
             self._tp_price = entry * (1 - self.tp_pct / 100) if self.tp_pct else None
 
     def update(self, ctx: StopContext):
-        pass  # Fixed levels don't move
+        pass
 
     def check(self, ctx: StopContext) -> StopResult:
-        # Check SL
         if self._side == Side.LONG and ctx.low <= self._sl_price:
-            return StopResult(
-                True,
-                self._sl_price,
-                f"Fixed SL hit @ {self._sl_price:.4f} (-{self.sl_pct}%)",
-            )
+            return StopResult(True, self._sl_price, f"Fixed SL hit @ {self._sl_price:.4f} (-{self.sl_pct}%)")
         if self._side == Side.SHORT and ctx.high >= self._sl_price:
-            return StopResult(
-                True,
-                self._sl_price,
-                f"Fixed SL hit @ {self._sl_price:.4f} (+{self.sl_pct}%)",
-            )
-        # Check TP
+            return StopResult(True, self._sl_price, f"Fixed SL hit @ {self._sl_price:.4f} (+{self.sl_pct}%)")
         if self._tp_price is not None:
             if self._side == Side.LONG and ctx.high >= self._tp_price:
-                return StopResult(
-                    True,
-                    self._tp_price,
-                    f"Fixed TP hit @ {self._tp_price:.4f} (+{self.tp_pct}%)",
-                )
+                return StopResult(True, self._tp_price, f"Fixed TP hit @ {self._tp_price:.4f} (+{self.tp_pct}%)")
             if self._side == Side.SHORT and ctx.low <= self._tp_price:
-                return StopResult(
-                    True,
-                    self._tp_price,
-                    f"Fixed TP hit @ {self._tp_price:.4f} (-{self.tp_pct}%)",
-                )
+                return StopResult(True, self._tp_price, f"Fixed TP hit @ {self._tp_price:.4f} (-{self.tp_pct}%)")
         return StopResult()
 
     def reset(self):
@@ -179,18 +135,9 @@ class FixedPercentStop(StopLoss):
 
 
 class ATRStop(StopLoss):
-    """
-    Stop-loss at N × ATR from entry.  Optional TP at M × ATR.
+    """Stop-loss at N × ATR from entry. Optional TP at M × ATR."""
 
-    Requires an 'atr' column in data (Signal.atr() computes this).
-    """
-
-    def __init__(
-        self,
-        atr_mult_sl: float = 2.0,
-        atr_mult_tp: float | None = 3.0,
-        atr_col: str = "atr",
-    ):
+    def __init__(self, atr_mult_sl: float = 2.0, atr_mult_tp: float | None = 3.0, atr_col: str = "atr"):
         self.atr_mult_sl = atr_mult_sl
         self.atr_mult_tp = atr_mult_tp
         self.atr_col = atr_col
@@ -205,48 +152,27 @@ class ATRStop(StopLoss):
     def on_entry(self, position: Position, ctx: StopContext):
         self._side = position.side
         entry = position.entry_price
-        atr = ctx.bar_data.get(self.atr_col, entry * 0.02)  # fallback 2%
-
+        atr = ctx.bar_data.get(self.atr_col, entry * 0.02)
         if self._side == Side.LONG:
             self._sl_price = entry - self.atr_mult_sl * atr
-            self._tp_price = (
-                entry + self.atr_mult_tp * atr if self.atr_mult_tp else None
-            )
+            self._tp_price = entry + self.atr_mult_tp * atr if self.atr_mult_tp else None
         else:
             self._sl_price = entry + self.atr_mult_sl * atr
-            self._tp_price = (
-                entry - self.atr_mult_tp * atr if self.atr_mult_tp else None
-            )
+            self._tp_price = entry - self.atr_mult_tp * atr if self.atr_mult_tp else None
 
     def update(self, ctx: StopContext):
         pass
 
     def check(self, ctx: StopContext) -> StopResult:
         if self._side == Side.LONG and ctx.low <= self._sl_price:
-            return StopResult(
-                True,
-                self._sl_price,
-                f"ATR SL hit @ {self._sl_price:.4f} ({self.atr_mult_sl}×ATR)",
-            )
+            return StopResult(True, self._sl_price, f"ATR SL hit @ {self._sl_price:.4f} ({self.atr_mult_sl}×ATR)")
         if self._side == Side.SHORT and ctx.high >= self._sl_price:
-            return StopResult(
-                True,
-                self._sl_price,
-                f"ATR SL hit @ {self._sl_price:.4f} ({self.atr_mult_sl}×ATR)",
-            )
+            return StopResult(True, self._sl_price, f"ATR SL hit @ {self._sl_price:.4f} ({self.atr_mult_sl}×ATR)")
         if self._tp_price is not None:
             if self._side == Side.LONG and ctx.high >= self._tp_price:
-                return StopResult(
-                    True,
-                    self._tp_price,
-                    f"ATR TP hit @ {self._tp_price:.4f} ({self.atr_mult_tp}×ATR)",
-                )
+                return StopResult(True, self._tp_price, f"ATR TP hit @ {self._tp_price:.4f} ({self.atr_mult_tp}×ATR)")
             if self._side == Side.SHORT and ctx.low <= self._tp_price:
-                return StopResult(
-                    True,
-                    self._tp_price,
-                    f"ATR TP hit @ {self._tp_price:.4f} ({self.atr_mult_tp}×ATR)",
-                )
+                return StopResult(True, self._tp_price, f"ATR TP hit @ {self._tp_price:.4f} ({self.atr_mult_tp}×ATR)")
         return StopResult()
 
     def reset(self):
@@ -256,16 +182,11 @@ class ATRStop(StopLoss):
 
 
 class TrailingStop(StopLoss):
-    """
-    Trailing stop-loss that follows price by a fixed percentage.
-
-    Long: SL ratchets up as price makes new highs.
-    Short: SL ratchets down as price makes new lows.
-    """
+    """Trailing stop-loss that follows price by a fixed percentage."""
 
     def __init__(self, trail_pct: float = 2.0, activation_pct: float = 0.0):
         self.trail_pct = trail_pct
-        self.activation_pct = activation_pct  # only start trailing after X% profit
+        self.activation_pct = activation_pct
         self._sl_price: float = 0
         self._peak: float = 0
         self._trough: float = float("inf")
@@ -283,14 +204,12 @@ class TrailingStop(StopLoss):
         self._peak = ctx.high
         self._trough = ctx.low
         self._activated = self.activation_pct <= 0
-
         if self._side == Side.LONG:
             self._sl_price = self._peak * (1 - self.trail_pct / 100)
         else:
             self._sl_price = self._trough * (1 + self.trail_pct / 100)
 
     def update(self, ctx: StopContext):
-        # Check activation
         if not self._activated:
             if self._side == Side.LONG:
                 gain_pct = (ctx.high - self._entry_price) / self._entry_price * 100
@@ -298,10 +217,8 @@ class TrailingStop(StopLoss):
                 gain_pct = (self._entry_price - ctx.low) / self._entry_price * 100
             if gain_pct >= self.activation_pct:
                 self._activated = True
-
         if not self._activated:
             return
-
         if self._side == Side.LONG:
             if ctx.high > self._peak:
                 self._peak = ctx.high
@@ -314,21 +231,10 @@ class TrailingStop(StopLoss):
     def check(self, ctx: StopContext) -> StopResult:
         if not self._activated:
             return StopResult()
-
         if self._side == Side.LONG and ctx.low <= self._sl_price:
-            return StopResult(
-                True,
-                self._sl_price,
-                f"Trailing SL hit @ {self._sl_price:.4f} "
-                f"(peak={self._peak:.4f}, trail={self.trail_pct}%)",
-            )
+            return StopResult(True, self._sl_price, f"Trailing SL hit @ {self._sl_price:.4f} (peak={self._peak:.4f}, trail={self.trail_pct}%)")
         if self._side == Side.SHORT and ctx.high >= self._sl_price:
-            return StopResult(
-                True,
-                self._sl_price,
-                f"Trailing SL hit @ {self._sl_price:.4f} "
-                f"(trough={self._trough:.4f}, trail={self.trail_pct}%)",
-            )
+            return StopResult(True, self._sl_price, f"Trailing SL hit @ {self._sl_price:.4f} (trough={self._trough:.4f}, trail={self.trail_pct}%)")
         return StopResult()
 
     def reset(self):
@@ -341,12 +247,7 @@ class TrailingStop(StopLoss):
 
 
 class TrailingATRStop(StopLoss):
-    """
-    Trailing stop using ATR-based distance (Chandelier-style).
-
-    Long: SL = highest_high − atr_mult × ATR (ratchets up)
-    Short: SL = lowest_low + atr_mult × ATR (ratchets down)
-    """
+    """Trailing stop using ATR-based distance (Chandelier-style)."""
 
     def __init__(self, atr_mult: float = 2.5, atr_col: str = "atr"):
         self.atr_mult = atr_mult
@@ -365,7 +266,6 @@ class TrailingATRStop(StopLoss):
         atr = ctx.bar_data.get(self.atr_col, ctx.close * 0.02)
         self._peak = ctx.high
         self._trough = ctx.low
-
         if self._side == Side.LONG:
             self._sl_price = self._peak - self.atr_mult * atr
         else:
@@ -373,31 +273,22 @@ class TrailingATRStop(StopLoss):
 
     def update(self, ctx: StopContext):
         atr = ctx.bar_data.get(self.atr_col, ctx.close * 0.02)
-
         if self._side == Side.LONG:
             if ctx.high > self._peak:
                 self._peak = ctx.high
             new_sl = self._peak - self.atr_mult * atr
-            self._sl_price = max(self._sl_price, new_sl)  # only ratchet up
+            self._sl_price = max(self._sl_price, new_sl)
         else:
             if ctx.low < self._trough:
                 self._trough = ctx.low
             new_sl = self._trough + self.atr_mult * atr
-            self._sl_price = min(self._sl_price, new_sl)  # only ratchet down
+            self._sl_price = min(self._sl_price, new_sl)
 
     def check(self, ctx: StopContext) -> StopResult:
         if self._side == Side.LONG and ctx.low <= self._sl_price:
-            return StopResult(
-                True,
-                self._sl_price,
-                f"Trailing ATR SL @ {self._sl_price:.4f} ({self.atr_mult}×ATR)",
-            )
+            return StopResult(True, self._sl_price, f"Trailing ATR SL @ {self._sl_price:.4f} ({self.atr_mult}×ATR)")
         if self._side == Side.SHORT and ctx.high >= self._sl_price:
-            return StopResult(
-                True,
-                self._sl_price,
-                f"Trailing ATR SL @ {self._sl_price:.4f} ({self.atr_mult}×ATR)",
-            )
+            return StopResult(True, self._sl_price, f"Trailing ATR SL @ {self._sl_price:.4f} ({self.atr_mult}×ATR)")
         return StopResult()
 
     def reset(self):
@@ -408,16 +299,11 @@ class TrailingATRStop(StopLoss):
 
 
 class BreakevenStop(StopLoss):
-    """
-    Move stop to breakeven (+ optional offset) after price reaches
-    `activation_pct` profit.
-
-    Often combined with another stop (e.g., TrailingStop) via CompositeStopLoss.
-    """
+    """Move stop to breakeven after price reaches `activation_pct` profit."""
 
     def __init__(self, activation_pct: float = 1.0, offset_pct: float = 0.1):
         self.activation_pct = activation_pct
-        self.offset_pct = offset_pct  # small offset above/below entry
+        self.offset_pct = offset_pct
         self._sl_price: float = 0
         self._entry_price: float = 0
         self._side: Side = Side.FLAT
@@ -431,12 +317,11 @@ class BreakevenStop(StopLoss):
         self._side = position.side
         self._entry_price = position.entry_price
         self._activated = False
-        self._sl_price = 0  # Not active until activated
+        self._sl_price = 0
 
     def update(self, ctx: StopContext):
         if self._activated:
             return
-
         if self._side == Side.LONG:
             gain = (ctx.high - self._entry_price) / self._entry_price * 100
             if gain >= self.activation_pct:
@@ -451,15 +336,10 @@ class BreakevenStop(StopLoss):
     def check(self, ctx: StopContext) -> StopResult:
         if not self._activated:
             return StopResult()
-
         if self._side == Side.LONG and ctx.low <= self._sl_price:
-            return StopResult(
-                True, self._sl_price, f"Breakeven SL hit @ {self._sl_price:.4f}"
-            )
+            return StopResult(True, self._sl_price, f"Breakeven SL hit @ {self._sl_price:.4f}")
         if self._side == Side.SHORT and ctx.high >= self._sl_price:
-            return StopResult(
-                True, self._sl_price, f"Breakeven SL hit @ {self._sl_price:.4f}"
-            )
+            return StopResult(True, self._sl_price, f"Breakeven SL hit @ {self._sl_price:.4f}")
         return StopResult()
 
     def reset(self):
@@ -469,11 +349,7 @@ class BreakevenStop(StopLoss):
 
 
 class TimeStop(StopLoss):
-    """
-    Exit after a maximum number of bars held.
-
-    Useful for mean-reversion strategies with a decay expectation.
-    """
+    """Exit after a maximum number of bars held."""
 
     def __init__(self, max_bars: int = 48):
         self.max_bars = max_bars
@@ -493,9 +369,7 @@ class TimeStop(StopLoss):
 
     def check(self, ctx: StopContext) -> StopResult:
         if self._bars_held >= self.max_bars:
-            return StopResult(
-                True, ctx.close, f"Time stop after {self._bars_held} bars"
-            )
+            return StopResult(True, ctx.close, f"Time stop after {self._bars_held} bars")
         return StopResult()
 
     def reset(self):
@@ -504,11 +378,7 @@ class TimeStop(StopLoss):
 
 
 class RiskRewardStop(StopLoss):
-    """
-    Set SL at a fixed distance, TP at a risk:reward ratio.
-
-    E.g., sl_pct=1%, rr_ratio=3 → TP at 3%.
-    """
+    """Set SL at a fixed distance, TP at a risk:reward ratio."""
 
     def __init__(self, sl_pct: float = 1.5, rr_ratio: float = 2.0):
         self.sl_pct = sl_pct
@@ -525,7 +395,6 @@ class RiskRewardStop(StopLoss):
         self._side = position.side
         entry = position.entry_price
         tp_pct = self.sl_pct * self.rr_ratio
-
         if self._side == Side.LONG:
             self._sl_price = entry * (1 - self.sl_pct / 100)
             self._tp_price = entry * (1 + tp_pct / 100)
@@ -539,26 +408,14 @@ class RiskRewardStop(StopLoss):
     def check(self, ctx: StopContext) -> StopResult:
         if self._side == Side.LONG:
             if ctx.low <= self._sl_price:
-                return StopResult(
-                    True, self._sl_price, f"R:R SL hit @ {self._sl_price:.4f}"
-                )
+                return StopResult(True, self._sl_price, f"R:R SL hit @ {self._sl_price:.4f}")
             if ctx.high >= self._tp_price:
-                return StopResult(
-                    True,
-                    self._tp_price,
-                    f"R:R TP hit @ {self._tp_price:.4f} ({self.rr_ratio}R)",
-                )
+                return StopResult(True, self._tp_price, f"R:R TP hit @ {self._tp_price:.4f} ({self.rr_ratio}R)")
         else:
             if ctx.high >= self._sl_price:
-                return StopResult(
-                    True, self._sl_price, f"R:R SL hit @ {self._sl_price:.4f}"
-                )
+                return StopResult(True, self._sl_price, f"R:R SL hit @ {self._sl_price:.4f}")
             if ctx.low <= self._tp_price:
-                return StopResult(
-                    True,
-                    self._tp_price,
-                    f"R:R TP hit @ {self._tp_price:.4f} ({self.rr_ratio}R)",
-                )
+                return StopResult(True, self._tp_price, f"R:R TP hit @ {self._tp_price:.4f} ({self.rr_ratio}R)")
         return StopResult()
 
     def reset(self):
@@ -568,9 +425,7 @@ class RiskRewardStop(StopLoss):
 
 
 class CompositeStopLoss(StopLoss):
-    """
-    Combine multiple stop-loss strategies.  First one to trigger wins.
-    """
+    """Combine multiple stop-loss strategies. First to trigger wins."""
 
     def __init__(self, stops: list[StopLoss] | None = None):
         self.stops = stops or [FixedPercentStop()]
@@ -603,14 +458,10 @@ class CompositeStopLoss(StopLoss):
         return copy.deepcopy(self)
 
 
-# ── No-op stop (uses signal's SL/TP if present — legacy behaviour) ──────────
-
-
 class SignalStop(StopLoss):
     """
     Defer to the signal's stop_loss/take_profit fields.
-    This is the default when no StopLoss is passed to the engine —
-    preserves backward compatibility.
+    Default when no StopLoss is passed to the engine — backward compatibility.
     """
 
     def __init__(self):
@@ -624,13 +475,11 @@ class SignalStop(StopLoss):
 
     def on_entry(self, position: Position, ctx: StopContext):
         self._side = position.side
-        # SL/TP will be set from signal each bar in the engine
 
     def update(self, ctx: StopContext):
         pass
 
     def check(self, ctx: StopContext) -> StopResult:
-        # This is handled specially by the engine for backward compat
         return StopResult()
 
     def set_levels(self, sl: float | None, tp: float | None):
@@ -638,28 +487,22 @@ class SignalStop(StopLoss):
         self._tp = tp
 
     def check_with_levels(self, ctx: StopContext) -> StopResult:
-        """Check signal-provided SL/TP."""
         if self._sl is not None:
             if self._side == Side.LONG and ctx.low <= self._sl:
                 return StopResult(True, self._sl, f"Signal SL hit @ {self._sl:.4f}")
             if self._side == Side.SHORT and ctx.high >= self._sl:
                 return StopResult(True, self._sl, f"Signal SL hit @ {self._sl:.4f}")
-
         if self._tp is not None:
             if self._side == Side.LONG and ctx.high >= self._tp:
                 return StopResult(True, self._tp, f"Signal TP hit @ {self._tp:.4f}")
             if self._side == Side.SHORT and ctx.low <= self._tp:
                 return StopResult(True, self._tp, f"Signal TP hit @ {self._tp:.4f}")
-
         return StopResult()
 
     def reset(self):
         self._sl = None
         self._tp = None
         self._side = Side.FLAT
-
-
-# ── Default ──────────────────────────────────────────────────────────────────
 
 
 def default_stop_loss() -> StopLoss:

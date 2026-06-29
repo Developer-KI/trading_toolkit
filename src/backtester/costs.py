@@ -19,7 +19,7 @@ from typing import Any
 
 import numpy as np
 
-from abstract.models import BacktestConfig, OrderBookSnapshot, Side
+from core.models import BacktestConfig, OrderBookSnapshot, Side
 
 
 # ── Abstract cost model ──────────────────────────────────────────────────────

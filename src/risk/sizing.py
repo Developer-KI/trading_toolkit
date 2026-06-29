@@ -1,17 +1,14 @@
 """
-sizing.py — Modular position sizing framework.
+risk/sizing.py — Modular position sizing framework.
 
-Every Sizer is a callable that takes the current state and returns a position
-size in base-asset units.  Sizers can be composed and stress-tested just like
-cost models.
+Moved here from strategy/sizing.py so the risk layer is independent of the
+strategy layer. strategy/sizing.py now re-exports from here for backward
+compatibility.
 
-Usage:
-    from backtester.sizing import VolatilityTargetSizer
+Every Sizer takes a SizingContext and returns position size in base-asset units.
+Sizers can be composed and stress-tested independently of any strategy.
 
-    bt = Backtester(
-        signal=my_signal,
-        sizer=VolatilityTargetSizer(target_vol=0.15, lookback=20),
-    )
+Dependency: core/ only — no imports from strategy/ or execution/.
 """
 
 from __future__ import annotations
@@ -24,11 +21,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from abstract.models import BacktestConfig, Position, Side, OrderBookSnapshot
-from .base import SignalResult
+from core.models import BacktestConfig, Position, Side, OrderBookSnapshot, SignalResult
 
 
-# ── Sizing context (passed to every sizer on each bar) ──────────────────────
+# ── Sizing context ────────────────────────────────────────────────────────────
 
 
 @dataclass
@@ -39,30 +35,27 @@ class SizingContext:
     price: float
     signal: SignalResult
     config: BacktestConfig
-    position: Position  # current (pre-trade) position
-    data: pd.DataFrame | None = None  # full OHLCV frame
-    bar_idx: int = 0  # current bar index
-    trade_history: list | None = None  # closed trades so far
+    position: Position
+    data: pd.DataFrame | None = None
+    bar_idx: int = 0
+    trade_history: list | None = None
     l2: OrderBookSnapshot | None = None
     bar_data: dict[str, float] = field(default_factory=dict)
 
 
-# ── Abstract base ────────────────────────────────────────────────────────────
+# ── Abstract base ─────────────────────────────────────────────────────────────
 
 
 class Sizer(abc.ABC):
     """
     Base class for position sizers.
 
-    Subclass and implement `compute()`.
-    Return value is position size in **base-asset units** (e.g. BTC, not USD).
-    The engine will cap this at `config.max_position_pct` after your call.
+    Return value is position size in base-asset units (e.g. BTC, not USD).
+    The engine caps the result at config.max_position_pct after your call.
     """
 
     @abc.abstractmethod
-    def compute(self, ctx: SizingContext) -> float:
-        """Return desired position size in base-asset units."""
-        ...
+    def compute(self, ctx: SizingContext) -> float: ...
 
     @property
     @abc.abstractmethod
@@ -77,9 +70,7 @@ class Sizer(abc.ABC):
         return f"{self.__class__.__name__}({self.params})"
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Concrete sizers
-# ═══════════════════════════════════════════════════════════════════════════
+# ── Concrete sizers ───────────────────────────────────────────────────────────
 
 
 class FixedFractionalSizer(Sizer):
@@ -100,13 +91,11 @@ class FixedFractionalSizer(Sizer):
     def compute(self, ctx: SizingContext) -> float:
         dollar_risk = ctx.equity * self.risk_frac * ctx.signal.target_weight
 
-        # If signal provides a stop-loss, size to that distance
         if ctx.signal.stop_loss is not None and ctx.signal.stop_loss > 0:
             sl_dist = abs(ctx.price - ctx.signal.stop_loss)
             if sl_dist > 0:
                 return (dollar_risk / sl_dist) * ctx.config.leverage
 
-        # Fallback: treat risk_frac as fraction of equity to allocate
         notional = dollar_risk * ctx.config.leverage
         return notional / ctx.price if ctx.price > 0 else 0
 
@@ -136,8 +125,6 @@ class VolatilityTargetSizer(Sizer):
     Target a specific annualised portfolio volatility.
 
     size = (target_vol * equity) / (realised_vol * price * √bars_per_year)
-
-    Needs an 'atr' or 'close' column to estimate vol.
     """
 
     def __init__(
@@ -157,10 +144,8 @@ class VolatilityTargetSizer(Sizer):
 
     def compute(self, ctx: SizingContext) -> float:
         if ctx.data is None or ctx.bar_idx < self.lookback:
-            # Not enough data — fall back to small size
             return ctx.equity * 0.01 * ctx.config.leverage / ctx.price
 
-        # Realised vol from returns
         closes = ctx.data["close"].iloc[
             max(0, ctx.bar_idx - self.lookback) : ctx.bar_idx + 1
         ]
@@ -174,11 +159,8 @@ class VolatilityTargetSizer(Sizer):
         if ann_vol < 1e-12:
             return 0
 
-        # Dollar vol budget
         dollar_vol_budget = ctx.equity * self.target_vol
-        # Per-unit dollar vol
         per_unit_vol = ctx.price * ann_vol
-
         size = (
             (dollar_vol_budget / per_unit_vol)
             * ctx.signal.target_weight
@@ -206,8 +188,8 @@ class KellySizer(Sizer):
         self.kelly_frac = kelly_frac
         self.min_trades = min_trades
         self.lookback_trades = lookback_trades
-        self.floor = floor  # minimum allocation as % of equity
-        self.cap = cap  # maximum allocation as % of equity
+        self.floor = floor
+        self.cap = cap
 
     @property
     def params(self):
@@ -236,7 +218,6 @@ class KellySizer(Sizer):
             else:
                 kelly_pct = win_rate
         else:
-            # Not enough trades — use signal confidence as proxy
             kelly_pct = ctx.signal.confidence * 0.5
 
         kelly_pct = max(kelly_pct, 0) * self.kelly_frac
@@ -251,10 +232,6 @@ class KellySizer(Sizer):
 class AntiMartingaleSizer(Sizer):
     """
     Increase position size after wins, decrease after losses.
-
-    Base size * (1 + streak_multiplier * consecutive_win_streak)
-    or
-    Base size * (1 - streak_multiplier * consecutive_loss_streak)
     """
 
     def __init__(
@@ -281,19 +258,6 @@ class AntiMartingaleSizer(Sizer):
     def compute(self, ctx: SizingContext) -> float:
         trades = ctx.trade_history or []
 
-        # Count consecutive streak
-        streak = 0
-        for t in reversed(trades):
-            if t.pnl > 0:
-                streak += 1
-            elif t.pnl < 0:
-                streak -= 1
-                break
-            else:
-                break
-            if t.pnl <= 0:
-                break
-        # Re-count properly
         streak = 0
         is_winning = True
         for t in reversed(trades):
@@ -329,7 +293,6 @@ class DrawdownScalingSizer(Sizer):
 
     At 0% drawdown → full size.
     At `max_dd_threshold` drawdown → `min_scale` of full size.
-    Linear interpolation between.
     """
 
     def __init__(
@@ -359,7 +322,6 @@ class DrawdownScalingSizer(Sizer):
             else 0
         )
 
-        # Linear scale: 1.0 at dd=0, min_scale at dd=max_dd_threshold
         if current_dd >= self.max_dd_threshold:
             scale = self.min_scale
         else:
@@ -379,8 +341,7 @@ class L2LiquiditySizer(Sizer):
     """
     Size based on available L2 book depth.
 
-    Never take more than `max_participation` of visible liquidity
-    at the desired price level.
+    Never take more than `max_participation` of visible liquidity.
     """
 
     def __init__(
@@ -402,7 +363,6 @@ class L2LiquiditySizer(Sizer):
         )
 
     def compute(self, ctx: SizingContext) -> float:
-        # Start with fractional sizing
         base_notional = (
             ctx.equity
             * self.base_risk_frac
@@ -424,27 +384,16 @@ class L2LiquiditySizer(Sizer):
         return base_size
 
 
-# ── Composite (chain / blend multiple sizers) ────────────────────────────────
-
-
 class CompositeSizer(Sizer):
     """
-    Combine multiple sizers.  Supports two modes:
-      • "min" — take the minimum of all sizers (most conservative)
-      • "avg" — weighted average of all sizers
-
-    Usage:
-        sizer = CompositeSizer(
-            sizers=[VolatilityTargetSizer(), DrawdownScalingSizer()],
-            mode="min",
-        )
+    Combine multiple sizers.  Modes: "min", "max", "avg".
     """
 
     def __init__(
         self,
         sizers: list[Sizer] | None = None,
         weights: list[float] | None = None,
-        mode: str = "min",  # <<<< Add callable
+        mode: str = "min",
     ):
         self.sizers = sizers or [FixedFractionalSizer()]
         self.weights = weights or [1.0 / len(self.sizers)] * len(self.sizers)
@@ -472,9 +421,6 @@ class CompositeSizer(Sizer):
             return sum(s * w for s, w in zip(sizes, self.weights))
         else:
             return min(sizes) if sizes else 0
-
-
-# ── Default ──────────────────────────────────────────────────────────────────
 
 
 def default_sizer() -> Sizer:

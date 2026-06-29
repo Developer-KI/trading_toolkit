@@ -25,7 +25,7 @@ from typing import Any, Callable
 import numpy as np
 import pandas as pd
 
-from abstract.models import BacktestConfig, OrderBookSnapshot
+from core.models import BacktestConfig, OrderBookSnapshot
 from .costs import CostModel, CompositeCostModel
 from .engine import Backtester, BacktestResult
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from abstract.models import Side
+from core.models import Side
 from strategy.indicators import rsi
 
 from .base import (

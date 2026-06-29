@@ -10,8 +10,8 @@ Shows four patterns:
 
 from pathlib import Path
 
-from abstract.models import BacktestConfig, Side
-from abstract.parser import trades_to_ohlc, l2_to_orderbook
+from core.models import BacktestConfig, Side
+from core.parser import trades_to_ohlc, l2_to_orderbook
 
 from backtester.engine import Backtester
 from backtester.costs import CompositeCostModel, aggressive_cost_stack
@@ -19,8 +19,8 @@ from backtester.stress import SignalStressTest
 
 from strategy.base import Signal, SignalResult, register_signal
 from strategy.indicators import ema
-from strategy.sizing import VolatilityTargetSizer, CompositeSizer, KellySizer
-from strategy.stoploss import SignalStop
+from risk.sizing import VolatilityTargetSizer, CompositeSizer, KellySizer
+from risk.stops import SignalStop
 
 from strategy.universe import Universe
 from strategy.built_in import SingleSignalStrategy

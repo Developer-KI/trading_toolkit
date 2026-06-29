@@ -18,36 +18,17 @@ import abc
 import logging
 import threading
 import time
-from dataclasses import dataclass
 from typing import Callable
 
 import numpy as np
 import pandas as pd
 
-from abstract.models import AggregatedPosition, ExchangePosition, FundingSnapshot, Side, Position, OrderBookSnapshot
+from core.models import AggregatedPosition, ExchangePosition, FundingSnapshot, FillResult, Side, Position, OrderBookSnapshot
 
 logger = logging.getLogger(__name__)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  FillResult (shared across all exchanges)
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-@dataclass
-class FillResult:
-    """Result of an order submission — exchange-agnostic."""
-    success: bool
-    fill_price: float = 0.0
-    filled_size: float = 0.0
-    order_id: str = ""
-    status: str = ""
-    exchange: str = ""         # "hyperliquid", "binance", etc.
-    raw: dict = None
-
-    def __post_init__(self):
-        if self.raw is None:
-            self.raw = {}
+# FillResult is now defined in core/models.py and imported above.
 
 
 # ═══════════════════════════════════════════════════════════════════════════

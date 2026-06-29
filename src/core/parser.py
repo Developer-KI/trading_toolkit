@@ -1,5 +1,5 @@
 """
-backtester/l2_parser.py — Parse multi-level L2 order book data.
+core/parser.py — Parse multi-level L2 order book data.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from abstract.models import OrderBookSnapshot, OrderBookLevel
+from core.models import OrderBookSnapshot, OrderBookLevel
 
 
 @staticmethod

@@ -1,8 +1,8 @@
 """
-models.py — Data models for the vectorized backtester.
+core/models.py — Canonical data models for the entire trading system.
 
-Defines Trade, Position, OrderBookSnapshot, and configuration dataclasses
-used throughout the system. All timestamps are expected as pandas Timestamps.
+All other modules import their data types from here.
+Design rule: no imports from other src/ modules in this file.
 """
 
 from __future__ import annotations
@@ -18,6 +18,9 @@ import pandas as pd
 
 
 logger = logging.getLogger(__name__)
+
+
+# ── Enums ────────────────────────────────────────────────────────────────────
 
 class Side(enum.Enum):
     LONG = 1
@@ -50,7 +53,6 @@ class OrderBookSnapshot:
 
     @property
     def book_depth(self) -> int:
-        # Treat the left over book levels, if there are any, as non-existent
         return min(len(self.bids), len(self.asks))
 
     @property
@@ -98,7 +100,8 @@ class OrderBookSnapshot:
         if filled == 0:
             return np.nan
         return cost / filled
-    
+
+
 # ── Funding Rate Snapshot ─────────────────────────────────────────────────────
 
 
@@ -107,22 +110,18 @@ class FundingSnapshot:
     """
     Single funding rate observation for a perpetual swap.
 
-    Exchanges publish funding rates at fixed intervals (typically 8h).
-    Align these to your bar timestamps so the engine and cost models
-    can look up the rate that was active on any given bar.
-
     Fields:
         timestamp:        when this rate was observed / published
         rate:             per-period funding rate (e.g. 0.0001 = 1 bps)
         rate_annualized:  convenience pre-computed annual rate in bps
-        oracle_price:     spot / index price the exchange uses as reference (missing = 0.0)
-        mark_price:       fair price used for funding & liquidation calcs (missing = 0.0)
+        oracle_price:     spot / index price the exchange uses as reference
+        mark_price:       fair price used for funding & liquidation calcs
     """
     timestamp: pd.Timestamp
-    rate: float                  # per-period (e.g. per 8h)
-    rate_annualized: float       # annualised, in basis points
-    oracle_price: float = 0.0   # spot / index reference price
-    mark_price: float = 0.0     # exchange mark price
+    rate: float
+    rate_annualized: float
+    oracle_price: float = 0.0
+    mark_price: float = 0.0
 
 
 # ── Trade / Position ─────────────────────────────────────────────────────────
@@ -173,34 +172,61 @@ class Position:
     unrealized_pnl: float = 0.0
 
 
-# ── Backtester Configuration ────────────────────────────────────────────────
+# ── Signal result (lives here so risk/ can import it without touching strategy/) ─
+
+
+@dataclass
+class SignalResult:
+    """Output of Signal.generate() — also used as sizing/stop input adapter."""
+
+    target_side: Side = Side.FLAT
+    target_weight: float = 0.0
+    confidence: float = 0.0
+    reason: str = ""
+    order_type: str = "market"
+    limit_price: float | None = None
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    meta: dict[str, Any] = field(default_factory=dict)
+
+
+# ── Fill result (shared across all exchanges) ─────────────────────────────────
+
+
+@dataclass
+class FillResult:
+    """Result of an order submission — exchange-agnostic."""
+    success: bool
+    fill_price: float = 0.0
+    filled_size: float = 0.0
+    order_id: str = ""
+    status: str = ""
+    exchange: str = ""
+    raw: dict = None
+
+    def __post_init__(self):
+        if self.raw is None:
+            self.raw = {}
+
+
+# ── Configuration ────────────────────────────────────────────────────────────
 
 
 @dataclass
 class BacktestConfig:
     initial_capital: float = 100_000.0
-    position_sizing: str = (
-        "fixed_fractional"  # fixed_fractional | fixed_notional | kelly
-    )
-    risk_per_trade: float = 0.02  # fraction of equity risked per trade
-    max_position_pct: float = 0.25  # max % of equity
-    use_l2_fills: bool = False  # walk-the-book fill simulation
-    maker_fee_bps: float = 2.0  # exchange maker fee
-    taker_fee_bps: float = 5.0  # exchange taker fee
-    funding_rate_annual_bps: float = 0.0  # perpetual funding rate (annualised)
-    slippage_model: str = "fixed"  # fixed | proportional | l2_book
-    slippage_bps: float = 1.0  # used by fixed/proportional models
-    margin_type: str = "cross"  # cross | isolated
+    position_sizing: str = "fixed_fractional"
+    risk_per_trade: float = 0.02
+    max_position_pct: float = 0.25
+    use_l2_fills: bool = False
+    maker_fee_bps: float = 2.0
+    taker_fee_bps: float = 5.0
+    funding_rate_annual_bps: float = 0.0
+    slippage_model: str = "fixed"
+    slippage_bps: float = 1.0
+    margin_type: str = "cross"
     leverage: float = 1.0
     export_path: str = "backtest_output"
-
-    """
-execution/models.py — Configuration for live execution (exchange-agnostic).
-
-The old HyperliquidConfig is preserved as a factory method for backward
-compatibility.  New code should use LiveConfig directly and pass exchange
-credentials via ExchangeCredentials.
-"""
 
 
 @dataclass
@@ -211,42 +237,28 @@ class ExchangeCredentials:
     Each exchange has different auth requirements:
       • Hyperliquid: account_address + secret_key
       • Binance:     api_key + api_secret
-      • Bybit:       api_key + api_secret
-      • OKX:         api_key + api_secret + passphrase
-
-    Put whatever you need in `extra` for exchange-specific fields.
     """
-    exchange: str = ""             # "hyperliquid", "binance", "bybit", …
-    api_key: str = ""              # Binance/Bybit/OKX: API key
-    api_secret: str = ""           # Binance/Bybit/OKX: API secret
-    account_address: str = ""      # Hyperliquid: wallet address
-    secret_key: str = ""           # Hyperliquid: API wallet private key
+    exchange: str = ""
+    api_key: str = ""
+    api_secret: str = ""
+    account_address: str = ""
+    secret_key: str = ""
     testnet: bool = True
     extra: dict[str, Any] = field(default_factory=dict)
-
-    # Convenience: symbol map for this exchange (e.g. {"ETH": "ETHUSDT"})
     symbol_map: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
 class LiveConfig:
-    """
-    All settings needed to run a strategy live on one or more exchanges.
-
-    Replaces the old Hyperliquid-specific config.  Fully backward-compatible:
-    old code that sets account_address/secret_key/use_testnet still works.
-    """
+    """All settings needed to run a strategy live on one or more exchanges."""
 
     # ── Exchange credentials ─────────────────────────────────────────────
-    # Option A: single exchange (backward compat)
     exchange: str = "hyperliquid"
     account_address: str = ""
     secret_key: str = ""
     api_key: str = ""
     api_secret: str = ""
     use_testnet: bool = True
-
-    # Option B: multi-exchange
     exchanges: list[ExchangeCredentials] | None = None
 
     # ── Market ───────────────────────────────────────────────────────────
@@ -295,8 +307,6 @@ class LiveConfig:
     def is_multi_exchange(self) -> bool:
         return self.exchanges is not None and len(self.exchanges) > 1
 
-    # ── Backward-compat URL helpers (single-exchange Hyperliquid) ────────
-
     @property
     def api_url(self) -> str:
         if self.exchange == "hyperliquid":
@@ -322,47 +332,19 @@ class LiveConfig:
         return ""
 
     def get_credentials(self) -> list[ExchangeCredentials]:
-        """
-        Resolve credentials to a flat list.
-
-        If self.exchanges is set, return that.
-        Otherwise, build a single-entry list from the top-level fields.
-        """
         if self.exchanges:
             return list(self.exchanges)
-
-        cred = ExchangeCredentials(
+        return [ExchangeCredentials(
             exchange=self.exchange,
             api_key=self.api_key,
             api_secret=self.api_secret,
             account_address=self.account_address,
             secret_key=self.secret_key,
             testnet=self.use_testnet,
-        )
-        return [cred]
-    
-    """
-execution/portfolio.py — Cross-exchange portfolio aggregator.
+        )]
 
-Tracks positions and equity across multiple exchanges simultaneously.
-The engine queries this instead of individual executors when it needs
-portfolio-level data (total equity, net exposure, combined positions).
 
-This is what enables hedging across exchanges — for example, going long
-ETH on Hyperliquid and short ETH on Binance, and seeing the net position
-as flat from the portfolio's perspective.
-
-Usage:
-    portfolio = MultiExchangePortfolio()
-    portfolio.register(hl_executor)
-    portfolio.register(bn_executor)
-
-    # Get combined view
-    total_equity = portfolio.total_equity()
-    net_pos = portfolio.net_position("ETH")           # aggregated
-    positions = portfolio.all_positions()              # per-exchange breakdown
-    exposure = portfolio.net_exposure_pct()             # net $ as % of equity
-"""
+# ── Portfolio aggregation ─────────────────────────────────────────────────────
 
 
 @dataclass
@@ -385,15 +367,14 @@ class AggregatedPosition:
     the net is long 4 ETH.
     """
     symbol: str
-    net_size: float = 0.0          # positive = net long, negative = net short
+    net_size: float = 0.0
     net_side: Side = Side.FLAT
-    gross_long: float = 0.0        # total long size across exchanges
-    gross_short: float = 0.0       # total short size across exchanges
+    gross_long: float = 0.0
+    gross_short: float = 0.0
     per_exchange: list[ExchangePosition] = field(default_factory=list)
 
     @property
     def is_hedged(self) -> bool:
-        """True if we have opposing positions on different exchanges."""
         return self.gross_long > 0 and self.gross_short > 0
 
     @property

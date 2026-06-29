@@ -31,7 +31,7 @@ from typing import Callable
 import pandas as pd
 import websocket
 
-from abstract.models import OrderBookLevel, OrderBookSnapshot
+from core.models import OrderBookLevel, OrderBookSnapshot
 from ..base_executor_feed import BaseFeed
 
 logger = logging.getLogger(__name__)

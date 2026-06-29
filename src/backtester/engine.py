@@ -32,7 +32,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from abstract.models import (
+from core.models import (
     BacktestConfig,
     OrderBookSnapshot,
     Position,
@@ -40,8 +40,8 @@ from abstract.models import (
     Trade,
 )
 from backtester.costs import CostModel, CompositeCostModel
-from strategy.sizing import Sizer, SizingContext, default_sizer
-from strategy.stoploss import (
+from risk.sizing import Sizer, SizingContext, default_sizer
+from risk.stops import (
     StopLoss,
     StopContext,
     SignalStop,

@@ -84,7 +84,7 @@ from .indicators import (
 
 # ── Sizing ──────────────────────────────────────────────────────────────────
 
-from .sizing import (
+from risk.sizing import (
     Sizer,
     SizingContext,
     FixedFractionalSizer,
@@ -100,7 +100,7 @@ from .sizing import (
 
 # ── Stop-loss ───────────────────────────────────────────────────────────────
 
-from .stoploss import (
+from risk.stops import (
     StopLoss,
     StopResult,
     StopContext,

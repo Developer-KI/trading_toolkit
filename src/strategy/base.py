@@ -20,7 +20,7 @@ from typing import Any
 
 import pandas as pd
 
-from abstract.models import Side, OrderBookSnapshot, Position, FundingSnapshot
+from core.models import Side, OrderBookSnapshot, Position, FundingSnapshot, SignalResult
 from .universe import Universe
 
 
@@ -65,22 +65,10 @@ def list_signals() -> list[str]:
     return list(_SIGNAL_REGISTRY.keys())
 
 
-# ── Signal result ────────────────────────────────────────────────────────────
-
-
-@dataclass
-class SignalResult:
-    """Returned by Signal.generate() on every bar."""
-
-    target_side: Side = Side.FLAT  # desired position direction
-    target_weight: float = 0.0  # 0..1 weight (sizing hint)
-    confidence: float = 0.0  # 0..1 conviction score
-    reason: str = ""  # human-readable entry/exit reason
-    order_type: str = "market"  # market | limit | stop
-    limit_price: float | None = None  # for limit orders
-    stop_loss: float | None = None  # optional SL price
-    take_profit: float | None = None  # optional TP price
-    meta: dict[str, Any] = field(default_factory=dict)  # arbitrary payload
+# SignalResult is now defined in core/models.py and re-exported here for
+# backward compatibility. Any code doing `from strategy.base import SignalResult`
+# continues to work unchanged.
+# (SignalResult imported above from core.models)
 
 
 # ── Abstract base ────────────────────────────────────────────────────────────

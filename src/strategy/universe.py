@@ -18,7 +18,7 @@ from typing import Any
 
 import pandas as pd
 
-from abstract.models import OrderBookSnapshot, FundingSnapshot
+from core.models import OrderBookSnapshot, FundingSnapshot
 
 
 # ── Auxiliary data sources ───────────────────────────────────────────────────

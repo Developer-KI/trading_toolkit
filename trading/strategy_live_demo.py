@@ -26,12 +26,12 @@ from dotenv import load_dotenv
 
 import pandas as pd
 
-from abstract.models import LiveConfig, Side
+from core.models import LiveConfig, Side
 from execution.live_engine import LiveEngine
 
 from strategy.base import Signal, SignalResult, register_signal
 from strategy.indicators import compute_atr_column, ema
-from strategy.sizing import VolatilityTargetSizer, CompositeSizer, KellySizer
+from risk.sizing import VolatilityTargetSizer, CompositeSizer, KellySizer
 
 
 @register_signal("ema_crossover")

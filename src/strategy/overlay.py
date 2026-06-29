@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import abc
 
-from abstract.models import Side
+from core.models import Side
 from .base import Allocation, CrossExchangeContext, MultiExchangeTarget
 
 class PortfolioOverlay(abc.ABC):
