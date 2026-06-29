@@ -1,9 +1,8 @@
 """
-data/historical/ — Historical OHLCV and funding rate loaders.
+data/historical/ — Batch historical data downloaders.
 
-Moved from data_ingestion/:
-  hype_bridge_historical.py  → data/historical/hyperliquid.py
-  binance_websocket.py       → data/historical/binance.py (batch download)
+  hyperliquid_bridge.py   Retroactive HL bridge deposit/withdrawal history (Arbiscan)
+  hyperliquid_l2.py       Bulk download HL L2 tick data from S3 archive (LZ4)
 
 Each loader returns pandas DataFrames or writes Parquet files.
 """

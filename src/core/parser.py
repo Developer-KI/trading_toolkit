@@ -13,9 +13,10 @@ import pandas as pd
 from core.models import OrderBookSnapshot, OrderBookLevel
 
 
-@staticmethod
 def l2_to_orderbook(
-    input_folder: str | Path, ohlcv_data: pd.DataFrame | None, aligned=True
+    input_folder: str | Path,
+    ohlcv_data: pd.DataFrame | None = None,
+    aligned: bool = True,
 ) -> list[OrderBookSnapshot]:
     data = pd.read_parquet(input_folder, engine="pyarrow")
 
@@ -24,13 +25,12 @@ def l2_to_orderbook(
     data.drop("timestamp", axis=1, inplace=True)
 
     orderbook = parse_l2(data)
-    if aligned:
+    if aligned and ohlcv_data is not None:
         orderbook = align_l2_to_ohlcv(orderbook, ohlcv_data)
 
     return orderbook
 
 
-@staticmethod
 def trades_to_ohlc(input_folder: str | Path) -> pd.DataFrame:
     output = pd.DataFrame()
     data = pd.read_parquet(input_folder, engine="pyarrow")

@@ -4,6 +4,7 @@ __pycache__
 
 logs/
 build/
+data/
 
 **/p_* 
 *.png

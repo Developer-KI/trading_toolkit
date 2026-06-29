@@ -1,11 +1,10 @@
 """
 data/sentiment/ — Social sentiment scrapers.
 
-Moved from data_ingestion/sentiment_scrapers/:
-  x.py        ← x_scraper.py
-  reddit.py   ← reddit_scraper.py
-  telegram.py ← telegram_scraper.py
-  chan.py     ← chan_scraper.py
+  x.py         X.com (Twitter) posts via Playwright (no API required)
+  reddit.py    Reddit incremental post + comment scraper
+  telegram.py  Telegram channel/group message fetcher (Telethon)
+  chan.py      4chan /biz/ board scraper (archive + live)
 
-Each scraper returns raw text or pre-scored sentiment data.
+Each scraper outputs CSV or raw text for downstream sentiment scoring.
 """

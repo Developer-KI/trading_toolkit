@@ -43,12 +43,29 @@ src/
 │   └── binance/                # Binance USD-M executor + WebSocket feed
 │
 ├── data/               # Unified data layer — depends only on core/
-│   ├── feeds/base.py   # DataFeedProtocol (subscribe/unsubscribe/start/stop)
-│   ├── historical/     # Batch OHLCV + funding rate loaders
-│   ├── sentiment/      # Social sentiment scrapers (X, Reddit, Telegram, 4chan)
-│   └── auxiliary/      # Misc one-off sources (bid/ask, on-chain, GitHub)
+│   ├── feeds/
+│   │   ├── base.py              # DataFeedProtocol (subscribe/unsubscribe/start/stop)
+│   │   ├── hyperliquid.py       # HL perp/spot multi-stream (trades, L2, funding, wallet)
+│   │   ├── hyperliquid_bridge.py # Live Arbitrum bridge flows via Alchemy WebSocket
+│   │   ├── binance.py           # Binance trades/depth/funding + batch backfill
+│   │   └── binance_liquidations.py # Global liquidation stream (!forceOrder@arr)
+│   ├── historical/
+│   │   ├── hyperliquid_bridge.py # Retroactive bridge deposit/withdrawal (Arbiscan)
+│   │   └── hyperliquid_l2.py    # Bulk L2 tick download from S3 archive (LZ4)
+│   ├── sentiment/
+│   │   ├── x.py        # X.com Playwright scraper
+│   │   ├── reddit.py   # Reddit incremental post/comment scraper
+│   │   ├── telegram.py # Telegram channel/group message fetcher
+│   │   └── chan.py     # 4chan /biz/ scraper
+│   └── auxiliary/
+│       ├── bid_ask.py  # HL market microstructure scanner (spreads, MM scoring)
+│       └── crypto.py   # Macro REST poller (Binance OI, DeFiLlama, Deribit vol)
 │
-└── utils/              # Plotting and sentiment utilities
+└── utils/              # Shared utilities
+    ├── plotting.py             # Equity curve + trade visualisation
+    ├── sentiment_preprocess.py # Text cleaning + tokenisation
+    ├── sentiment_score.py      # VADER / transformer sentiment scoring
+    └── http.py                 # Lightweight GET/POST HTTP client (DataFetcher)
 ```
 
 ### Dependency order
