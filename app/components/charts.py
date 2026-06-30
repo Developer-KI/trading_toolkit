@@ -169,29 +169,135 @@ def trade_markers(fig: go.Figure, trades_df: pd.DataFrame) -> go.Figure:
         s = str(v)
         return s.split(".")[-1] if "." in s else s
 
-    side_col = trades_df["side"].map(_to_str) if "side" in trades_df.columns else pd.Series(["LONG"] * len(trades_df))
+    side_col = trades_df["side"].map(_to_str) if "side" in trades_df.columns else pd.Series(["LONG"] * len(trades_df), index=trades_df.index)
     ts_col = "timestamp"
     ep_col = "entry_price"
     xp_col = "exit_price"
 
     for side, color, sym in [("LONG", _GREEN, "triangle-up"), ("SHORT", _RED, "triangle-down")]:
         sub = trades_df[side_col == side]
-        if not sub.empty:
-            fig.add_trace(go.Scatter(
-                x=sub[ts_col], y=sub[ep_col],
-                mode="markers", name=f"{side} Entry",
-                marker=dict(color=color, size=10, symbol=sym),
-            ))
-
-    exits = trades_df.dropna(subset=[xp_col]) if xp_col in trades_df.columns else pd.DataFrame()
-    if not exits.empty:
-        exit_colors = [_GREEN if p > 0 else _RED for p in exits.get("pnl", [0] * len(exits))]
-        exit_ts = exits.get("exit_timestamp", exits[ts_col])
+        if sub.empty:
+            continue
+        reason_entry = sub["reason_entry"] if "reason_entry" in sub.columns else pd.Series(["—"] * len(sub), index=sub.index)
+        custom = pd.DataFrame({
+            "entry_price": sub[ep_col],
+            "side": side,
+            "reason": reason_entry.fillna("—"),
+        }).values
         fig.add_trace(go.Scatter(
-            x=exit_ts, y=exits[xp_col],
-            mode="markers", name="Exit",
-            marker=dict(color=exit_colors, size=8, symbol="x"),
+            x=sub[ts_col], y=sub[ep_col],
+            mode="markers", name=f"{side} Entry",
+            legendgroup=f"{side} Entry",
+            marker=dict(color=color, size=14, symbol=sym, line=dict(color="white", width=1.5)),
+            customdata=custom,
+            hovertemplate=(
+                "<b>%{customdata[1]} ENTRY</b><br>"
+                "Price: %{y:.4f}<br>"
+                "Reason: %{customdata[2]}<extra></extra>"
+            ),
         ))
+
+    if xp_col not in trades_df.columns:
+        return fig
+    exits = trades_df.dropna(subset=[xp_col])
+    if exits.empty:
+        return fig
+
+    pnl_series = exits["pnl"] if "pnl" in exits.columns else pd.Series([0.0] * len(exits), index=exits.index)
+    pnl_pct_series = exits["pnl_pct"] if "pnl_pct" in exits.columns else pd.Series([0.0] * len(exits), index=exits.index)
+    exit_ts = exits["exit_timestamp"] if "exit_timestamp" in exits.columns else exits[ts_col]
+
+    for label, color, mask in [
+        ("Exit WIN", _GREEN, pnl_series > 0),
+        ("Exit LOSS", _RED, pnl_series <= 0),
+    ]:
+        grp = exits[mask]
+        if grp.empty:
+            continue
+        custom = pd.DataFrame({
+            "exit_price": grp[xp_col],
+            "pnl": pnl_series[mask].fillna(0),
+            "pnl_pct": pnl_pct_series[mask].fillna(0),
+        }).values
+        fig.add_trace(go.Scatter(
+            x=exit_ts[mask], y=grp[xp_col],
+            mode="markers", name=label,
+            legendgroup="Exits",
+            marker=dict(color=color, size=10, symbol="x-thin", line=dict(color="white", width=1.5)),
+            customdata=custom,
+            hovertemplate=(
+                f"<b>{label}</b><br>"
+                "Price: %{y:.4f}<br>"
+                "PnL: %{customdata[1]:.2f} (%{customdata[2]:.2f}%)<extra></extra>"
+            ),
+        ))
+    return fig
+
+
+def signal_log_chart(signal_log: pd.DataFrame, height: int = 320) -> go.Figure:
+    """Two-panel signal log: direction bars (top) + confidence/weight lines (bottom)."""
+    ts = pd.to_datetime(signal_log["timestamp"], unit="ms", errors="coerce")
+    if ts.isna().all():
+        ts = pd.to_datetime(signal_log["timestamp"], errors="coerce")
+
+    direction = signal_log["side"].map({"LONG": 1, "FLAT": 0, "SHORT": -1}).fillna(0)
+    bar_colors = [
+        _GREEN if d == 1 else _RED if d == -1 else "rgba(100,100,100,0.35)"
+        for d in direction
+    ]
+    reason = signal_log["reason"] if "reason" in signal_log.columns else pd.Series([""] * len(signal_log))
+    side_str = signal_log["side"] if "side" in signal_log.columns else pd.Series([""] * len(signal_log))
+
+    fig = sp.make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        row_heights=[0.40, 0.60],
+        vertical_spacing=0.04,
+        subplot_titles=["Direction", "Confidence / Weight"],
+    )
+
+    # Row 1 — direction bars
+    fig.add_trace(go.Bar(
+        x=ts, y=direction,
+        marker_color=bar_colors,
+        name="Direction",
+        showlegend=False,
+        customdata=pd.concat([side_str.rename("side"), reason.rename("reason")], axis=1).values,
+        hovertemplate="<b>%{customdata[0]}</b><br>Reason: %{customdata[1]}<extra></extra>",
+    ), row=1, col=1)
+
+    # Row 2 — confidence + weight
+    if "confidence" in signal_log.columns:
+        fig.add_trace(go.Scatter(
+            x=ts, y=signal_log["confidence"],
+            name="Confidence", line=dict(color=_BLUE, width=1.5),
+            hovertemplate="Confidence: %{y:.3f}<extra></extra>",
+        ), row=2, col=1)
+
+    if "weight" in signal_log.columns:
+        fig.add_trace(go.Scatter(
+            x=ts, y=signal_log["weight"],
+            name="Weight", line=dict(color=_ORANGE, width=1.5),
+            hovertemplate="Weight: %{y:.3f}<extra></extra>",
+        ), row=2, col=1)
+
+    fig.update_layout(
+        template=_DARK,
+        height=height,
+        hovermode="x unified",
+        margin=_MARGIN_MAIN,
+        legend=_LEGEND_H,
+        bargap=0,
+    )
+    fig.update_yaxes(
+        tickvals=[-1, 0, 1],
+        ticktext=["SHORT", "FLAT", "LONG"],
+        range=[-1.5, 1.5],
+        row=1, col=1,
+        **_GRID,
+    )
+    fig.update_yaxes(range=[0, 1.05], row=2, col=1, **_GRID)
+    fig.update_xaxes(**_GRID)
     return fig
 
 

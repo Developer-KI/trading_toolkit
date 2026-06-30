@@ -12,10 +12,9 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from components.charts import candlestick_chart, equity_chart, trade_markers
+from components.charts import candlestick_chart, equity_chart, signal_log_chart, trade_markers
 from components.forms import backtest_config_form, signal_form, sizer_form, stop_form
 from components.style import inject
-from utils.plotting import plot_features
 
 st.set_page_config(page_title="Backtester", page_icon="🔬", layout="wide")
 inject()
@@ -130,11 +129,25 @@ if ohlcv_df is not None and not ohlcv_df.empty:
 
 # Signal log
 if result.signal_log is not None and not result.signal_log.empty:
-    sig_cols = [c for c in result.signal_log.columns if result.signal_log[c].dtype != object]
-    if sig_cols:
-        st.subheader("Signal Log")
-        fig_sig = plot_features(result.signal_log, sig_cols[:6], title="Signal Log", height=250)
-        st.plotly_chart(fig_sig, use_container_width=True)
+    st.subheader("Signal Log")
+    st.plotly_chart(signal_log_chart(result.signal_log, height=320), use_container_width=True)
+    with st.expander("Signal Log Table", expanded=False):
+        display_log = result.signal_log.copy()
+        if "timestamp" in display_log.columns:
+            ts_conv = pd.to_datetime(display_log["timestamp"], unit="ms", errors="coerce")
+            if not ts_conv.isna().all():
+                display_log["timestamp"] = ts_conv
+
+        def _color_side(val):
+            return {"LONG": "color: #26a69a", "SHORT": "color: #ef5350"}.get(val, "color: #9ba3b8")
+
+        st.dataframe(
+            display_log.style.applymap(
+                _color_side,
+                subset=["side"] if "side" in display_log.columns else [],
+            ),
+            use_container_width=True,
+        )
 
 # Trade table
 st.subheader("Trade Log")
