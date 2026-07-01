@@ -34,7 +34,7 @@ from .stops import (
     TimeStop,
     RiskRewardStop,
     CompositeStopLoss,
-    SignalStop,
+    EmbeddedStop,
     default_stop_loss,
 )
 
@@ -53,7 +53,7 @@ __all__ = [
     "StopLoss", "StopResult", "StopContext",
     "FixedPercentStop", "ATRStop", "TrailingStop", "TrailingATRStop",
     "BreakevenStop", "TimeStop", "RiskRewardStop",
-    "CompositeStopLoss", "SignalStop", "default_stop_loss",
+    "CompositeStopLoss", "EmbeddedStop", "default_stop_loss",
     # Limits
     "DailyLimitState", "check_daily_loss_limit",
 ]

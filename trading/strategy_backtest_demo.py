@@ -1,42 +1,38 @@
 """
-examples/multi_asset_demo.py — Demonstrates the multi-asset strategy framework.
+strategy_backtest_demo.py — Demonstrates the single-asset strategy framework.
 
-Shows four patterns:
-  1. Wrapping an existing Signal (backward compat)
-  2. Running different signals per asset
-  3. Built-in pairs spread strategy
-  4. Custom strategy with auxiliary data (funding rates)
+Shows:
+  1. A SingleAssetStrategy subclass (EMA crossover)
+  2. Running a backtest
+  3. Parameter sweep with ParamSweep
 """
 
 from pathlib import Path
 
-from core.models import BacktestConfig, Side
-from core.parser import trades_to_ohlcv, l2_to_orderbook, funding_to_snapshots, align_funding_to_ohlcv
+from core.models import BacktestConfig, Side, Allocation
+from core.parser import trades_to_ohlcv
 
 from backtester.engine import Backtester
 from backtester.costs import CompositeCostModel, aggressive_cost_stack
-from backtester.stress import SignalStressTest
+from backtester.stress import ParamSweep
 
-from strategy.base import Signal, SignalResult, register_signal
+from strategy.base import SingleAssetStrategy, register_strategy
 from strategy.indicators import ema
-from risk.sizing import VolatilityTargetSizer, CompositeSizer, KellySizer
-from risk.stops import SignalStop
-
 from strategy.universe import Universe
-from strategy.built_in import SingleSignalStrategy
+from risk.sizing import VolatilityTargetSizer, CompositeSizer
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  Pattern 1: Wrap an existing single-asset Signal
+#  EMA crossover strategy
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-@register_signal("demo_ema_cross")
-class DemoEMACross(Signal):
+@register_strategy("demo_ema_cross")
+class DemoEMACrossStrategy(SingleAssetStrategy):
     """Simple EMA crossover for demo."""
 
-    def __init__(self, fast: int = 12, slow: int = 26, **kw):
-        super().__init__(**kw)
+    def __init__(self, symbol: str, fast: int = 12, slow: int = 26, **kw):
+        super().__init__(symbol=symbol, **kw)
         self.fast = fast
         self.slow = slow
 
@@ -44,30 +40,30 @@ class DemoEMACross(Signal):
     def params(self):
         return {"fast": self.fast, "slow": self.slow}
 
-    def setup(self, data, l2=None):
+    def setup_data(self, data, l2=None):
         data["ema_fast"] = ema(data["close"], self.fast)
         data["ema_slow"] = ema(data["close"], self.slow)
 
-    def generate(self, data, idx):
+    def bar(self, data, idx) -> Allocation:
         if idx < self.slow:
-            return SignalResult()
+            return Allocation()
         fast_val = data["ema_fast"].iat[idx]
         slow_val = data["ema_slow"].iat[idx]
         if fast_val > slow_val:
-            return SignalResult(
-                target_side=Side.LONG,
-                target_weight=0.8,
+            return Allocation(
+                side=Side.LONG,
+                weight=0.8,
                 confidence=0.6,
-                reason=f"EMA cross up",
+                reason="EMA cross up",
             )
         elif fast_val < slow_val:
-            return SignalResult(
-                target_side=Side.SHORT,
-                target_weight=0.8,
+            return Allocation(
+                side=Side.SHORT,
+                weight=0.8,
                 confidence=0.6,
-                reason=f"EMA cross down",
+                reason="EMA cross down",
             )
-        return SignalResult()
+        return Allocation()
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -94,34 +90,30 @@ def demo():
         sizers=[VolatilityTargetSizer(target_vol=0.15)]
     )
 
-    stop = SignalStop()
-
     cost = CompositeCostModel(models=aggressive_cost_stack())
 
-    signal = DemoEMACross(fast=2, slow=5)
-
-    # A universe can hold as many strategies as it wants and can include axiliary data sources
-    universe = Universe(symbols=["ETH"])  
+    universe = Universe(symbols=["ETH"])
     universe.add_asset("ETH", eth_data)
 
+    strategy = DemoEMACrossStrategy(symbol="ETH", fast=2, slow=5)
+
     bt = Backtester(
-        signal=signal, config=config, cost_model=cost, sizer=sizer, stop_loss=stop
+        strategy=strategy, config=config, cost_model=cost, sizer=sizer
     )
-    result = bt.run(data=eth_data, timeframe=timeframe)
+    result = bt.run(universe=universe, timeframe=timeframe)
 
     print(result.summary())
 
     run_dir = result.save("demo_ema_cross")
     print(f"Backtest saved to: {run_dir}")
 
-    stress = SignalStressTest(
-        signal_cls=DemoEMACross,
+    sweep = ParamSweep(
+        strategy_cls=DemoEMACrossStrategy,
         param_grid={"fast": [2, 3], "slow": [5, 7]},
         cost_model=cost,
     )
-
-    sweep = stress.run(data=eth_data, timeframe=timeframe)
-    sweep.plot_heatmap(x="fast", y="slow", save_path=f"{run_dir}/heatmap_signal_sweep.png")
+    sweep_result = sweep.run(universe=universe, timeframe=timeframe)
+    sweep_result.plot_heatmap(x="fast", y="slow", save_path=f"{run_dir}/heatmap_sweep.png")
 
 
 if __name__ == "__main__":

@@ -75,20 +75,6 @@ class StressResult:
         return path
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
-def _run_backtester(
-    bt: Backtester,
-    *,
-    data: pd.DataFrame | None = None,
-    l2: list[OrderBookSnapshot] | None = None,
-    universe: Universe | None = None,
-) -> BacktestResult:
-    """Run a Backtester against whichever data source was provided."""
-    if universe is not None:
-        return bt.run(universe=universe)
-    return bt.run(data, l2)
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. Parameter sweep (single-asset strategy)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -558,13 +544,13 @@ class StrategyStressTest:
         result = sst.run(universe=my_universe)
         result.plot_heatmap("lookback", "entry_z")
 
-    For strategies that require non-serialisable constructor args (e.g.
-    Signal instances), pass them in ``fixed_params``:
+    For strategies that require non-serialisable constructor args, pass them
+    in ``fixed_params``:
 
         sst = StrategyStressTest(
-            strategy_cls=PerAssetSignalStrategy,
+            strategy_cls=PerAssetStrategy,
             param_grid={"some_threshold": [0.3, 0.5]},
-            fixed_params={"signals": {"ETH": eth_sig, "BTC": btc_sig}},
+            fixed_params={"strategies": {"ETH": eth_strat, "BTC": btc_strat}},
         )
     """
 

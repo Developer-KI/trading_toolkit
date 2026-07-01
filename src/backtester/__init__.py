@@ -14,7 +14,7 @@ from .costs import (
 )
 from .stress import (
     StressResult,
-    SignalStressTest,
+    ParamSweep,
     CostStressTest,
     RegimeStressTest,
     MonteCarloStress,
@@ -30,6 +30,6 @@ __all__ = [
     "L2BookSlippageCost", "SpreadCost", "FundingRateCost", "MarketImpactCost",
     "default_cost_stack", "aggressive_cost_stack",
     # Stress
-    "StressResult", "SignalStressTest", "CostStressTest",
+    "StressResult", "ParamSweep", "CostStressTest",
     "RegimeStressTest", "MonteCarloStress", "StrategyStressTest",
 ]

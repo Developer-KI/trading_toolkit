@@ -21,8 +21,8 @@ from .models import (
     # Trades & positions
     Trade,
     Position,
-    # Signal / sizing bridge
-    SignalResult,
+    # Strategy output
+    Allocation,
     FillResult,
     # Portfolio
     ExchangePosition,
@@ -58,7 +58,7 @@ __all__ = [
     "OrderBookLevel", "OrderBookSnapshot",
     "FundingSnapshot",
     "Trade", "Position",
-    "SignalResult", "FillResult",
+    "Allocation", "FillResult",
     "ExchangePosition", "AggregatedPosition",
     "BacktestConfig", "ExchangeCredentials", "LiveConfig",
     # Protocols

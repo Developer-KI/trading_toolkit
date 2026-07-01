@@ -1,17 +1,10 @@
 """
 strategy/ — Unified trading strategy framework.
 
-Consolidates signals, indicators, sizing, stop-losses, and multi-asset /
-multi-exchange strategy logic into a single package.
-
 Modules:
-    base.py        — Allocation, PortfolioTarget, Strategy (single-exchange)
-                      MultiExchangeTarget, CrossExchangeStrategy (cross-exchange)
-    built_in.py    — Signal adapters + built-in multi-asset strategies
+    base.py        — Allocation, PortfolioTarget, Strategy, SingleAssetStrategy
+    built_in.py    — CompositeStrategy, PerAssetStrategy, and multi-asset built-ins
     indicators.py  — Stateless indicator functions (EMA, RSI, ATR, …)
-    sizing.py      — Pluggable position sizers
-    stoploss.py    — Pluggable stop-loss / take-profit modules
-    overlay.py     — Cross-exchange risk overlays (net exposure cap, delta-neutral)
     universe.py    — Universe + auxiliary data sources
 """
 
@@ -25,28 +18,19 @@ from .universe import (
     Universe,
 )
 
-# --- Strategy base (signal) ----
-from .base import (
-    Signal,
-    SignalResult,
-    register_signal,
-    get_signal,
-    list_signals,
-)
-
-# ── Strategy base (single-exchange) ─────────────────────────────────────────
+# ── Strategy base ────────────────────────────────────────────────────────────
 
 from .base import (
-    Allocation,
     PortfolioTarget,
     StrategyContext,
     Strategy,
+    SingleAssetStrategy,
     register_strategy,
     get_strategy,
     list_strategies,
 )
 
-# ── Strategy base (cross-exchange) ──────────────────────────────────────────
+# ── Cross-exchange strategy ──────────────────────────────────────────────────
 
 from .base import (
     MultiExchangeTarget,
@@ -57,16 +41,19 @@ from .base import (
     list_cross_strategies,
 )
 
-# ── Adapters & built-in strategies ──────────────────────────────────────────
+# ── Built-in strategies ──────────────────────────────────────────────────────
 
 from .built_in import (
-    SingleSignalStrategy,
-    CompositeSignal,
-    PerAssetSignalStrategy,
+    CompositeStrategy,
+    PerAssetStrategy,
     ZPairsSpreadStrategy,
     CrossAssetMomentumStrategy,
     MeanReversionBasketStrategy,
 )
+
+# ── Allocation (re-exported from core for convenience) ───────────────────────
+
+from core.models import Allocation
 
 # ── Indicators ──────────────────────────────────────────────────────────────
 
@@ -112,7 +99,7 @@ from risk.stops import (
     TimeStop,
     RiskRewardStop,
     CompositeStopLoss,
-    SignalStop,
+    EmbeddedStop,
     default_stop_loss,
 )
 
@@ -130,18 +117,15 @@ __all__ = [
     # Universe & data
     "DataSource", "StaticDataSource", "CallableDataSource",
     "AssetData", "Universe",
-    # Signals base
-    "Signal", "SignalResult", "register_signal", "get_signal", "list_signals",
-    #Signals built in
-    "CompositeSignal",
-    # Single-exchange strategy
+    # Strategy base
     "Allocation", "PortfolioTarget", "StrategyContext",
-    "Strategy", "register_strategy", "get_strategy", "list_strategies",
+    "Strategy", "SingleAssetStrategy",
+    "register_strategy", "get_strategy", "list_strategies",
     # Cross-exchange strategy
     "MultiExchangeTarget", "CrossExchangeContext", "CrossExchangeStrategy",
     "register_cross_strategy", "get_cross_strategy", "list_cross_strategies",
-    # Adapters & built-ins
-    "SingleSignalStrategy", "PerAssetSignalStrategy",
+    # Built-in strategies
+    "CompositeStrategy", "PerAssetStrategy",
     "ZPairsSpreadStrategy", "CrossAssetMomentumStrategy",
     "MeanReversionBasketStrategy",
     # Indicators
@@ -157,7 +141,7 @@ __all__ = [
     "StopLoss", "StopResult", "StopContext",
     "FixedPercentStop", "ATRStop", "TrailingStop", "TrailingATRStop",
     "BreakevenStop", "TimeStop", "RiskRewardStop",
-    "CompositeStopLoss", "SignalStop", "default_stop_loss",
+    "CompositeStopLoss", "EmbeddedStop", "default_stop_loss",
     # Overlays
     "PortfolioOverlay", "NetExposureOverlay", "DeltaNeutralOverlay",
 ]
