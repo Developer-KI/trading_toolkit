@@ -38,7 +38,7 @@ with col_cfg:
     disabled = runner.is_alive  # lock form while engine is running
 
     # Exchange
-    exchange = st.selectbox("Exchange", ["hyperliquid", "binance"],
+    exchange = st.selectbox("Exchange", ["hyperliquid", "binance", "alpaca"],
                              key="live_exch", disabled=disabled)
     use_testnet = st.checkbox("Use testnet", value=True, key="live_testnet", disabled=disabled)
 
@@ -58,7 +58,7 @@ with col_cfg:
                                     value=env.get("HL_SECRET_KEY", ""),
                                     type="password", key="live_secret", disabled=disabled)
             api_key = api_secret = ""
-        else:
+        elif exchange == "binance":
             addr = secret = ""
             api_key = st.text_input("API key",
                                      value=env.get("BINANCE_API_KEY", ""),
@@ -66,6 +66,15 @@ with col_cfg:
             api_secret = st.text_input("API secret",
                                         value=env.get("BINANCE_API_SECRET", ""),
                                         type="password", key="live_api_secret", disabled=disabled)
+        else:  # alpaca
+            addr = secret = ""
+            api_key = st.text_input("Alpaca API key (paper)",
+                                     value=env.get("ALP_PAPER_KEY", ""),
+                                     type="password", key="live_alp_key", disabled=disabled)
+            api_secret = st.text_input("Alpaca API secret (paper)",
+                                        value=env.get("ALP_PAPER_SECRET", ""),
+                                        type="password", key="live_alp_secret", disabled=disabled)
+            st.caption("Paper trading — no leverage; market hours apply (9:30–16:00 ET)")
 
     # Market
     symbol = st.text_input("Symbol", value="ETH", key="live_sym", disabled=disabled).upper()

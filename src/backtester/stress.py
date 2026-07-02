@@ -526,7 +526,7 @@ class MonteCarloStress:
 class StrategyStressTest:
     """
     Grid/random sweep over Strategy parameters (multi-asset analogue of
-    SignalStressTest).
+    ParamSweep).
 
     The strategy_cls is instantiated fresh for each parameter combo, so
     the sweep covers constructor arguments.  Use ``fixed_params`` for

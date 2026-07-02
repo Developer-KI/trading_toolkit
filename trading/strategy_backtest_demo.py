@@ -19,7 +19,8 @@ from backtester.stress import ParamSweep
 from strategy.base import SingleAssetStrategy, register_strategy
 from strategy.indicators import ema
 from strategy.universe import Universe
-from risk.sizing import VolatilityTargetSizer, CompositeSizer
+from risk.sizing import FixedNotionalSizer, VolatilityTargetSizer
+from risk.stops import NopStopLoss
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -86,9 +87,9 @@ def demo():
         slippage_bps=1.0,
     )
 
-    sizer = CompositeSizer(
-        sizers=[VolatilityTargetSizer(target_vol=0.15)]
-    )
+    sizer = FixedNotionalSizer()
+    
+    stoploss = NopStopLoss()
 
     cost = CompositeCostModel(models=aggressive_cost_stack())
 
@@ -98,7 +99,7 @@ def demo():
     strategy = DemoEMACrossStrategy(symbol="ETH", fast=2, slow=5)
 
     bt = Backtester(
-        strategy=strategy, config=config, cost_model=cost, sizer=sizer
+        strategy=strategy, config=config, cost_model=cost, sizer=sizer, stop_loss=stoploss
     )
     result = bt.run(universe=universe, timeframe=timeframe)
 

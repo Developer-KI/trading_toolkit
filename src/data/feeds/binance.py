@@ -1,23 +1,11 @@
 """
-execution/binance_live_feed.py — Binance USD-M Futures WebSocket feed.
+data/feeds/binance.py — Binance USD-M Futures WebSocket feed for live trading.
 
-Implements BaseFeed using the binance-futures-connector WebSocket manager.
-Subscribes to:
-  • Trade stream  (@aggTrade)
-  • Kline stream  (@kline_1m)
-  • Partial book  (@depth10@100ms)
+Implements BaseFeed for the LiveEngine. Subscribes to aggTrade, kline_1m,
+and depth10 streams and dispatches via callbacks.
 
-Converts all data to the same dict format that BaseBarBuilder expects.
-
-Install:
-    pip install binance-futures-connector websocket-client
-
-Usage:
-    feed = BinanceFeed(symbol="ETH", testnet=True)
-    feed.start(
-        on_trade=bar_builder.on_trade,
-        on_candle=bar_builder.on_candle,
-    )
+Moved here from execution/binance/binance_live_feed.py so that
+execution/ owns only order placement and data/ owns all data acquisition.
 """
 
 from __future__ import annotations
@@ -32,7 +20,7 @@ import pandas as pd
 import websocket
 
 from core.models import OrderBookLevel, OrderBookSnapshot
-from ..base_executor_feed import BaseFeed
+from core.feeds import BaseFeed
 
 logger = logging.getLogger(__name__)
 
@@ -182,15 +170,6 @@ class BinanceFeed(BaseFeed):
     # ── Message handlers ─────────────────────────────────────────────────
 
     def _handle_trade(self, data: dict):
-        """
-        Parse aggTrade → {timestamp, price, size, side}
-
-        Binance aggTrade fields:
-            T: trade time (ms)
-            p: price
-            q: quantity
-            m: is buyer the maker? (True = seller aggressor = SELL)
-        """
         if not self._on_trade:
             return
         try:
@@ -204,12 +183,6 @@ class BinanceFeed(BaseFeed):
             logger.debug("Binance trade parse error: %s", e)
 
     def _handle_kline(self, data: dict):
-        """
-        Parse kline → candle dict.
-
-        Binance kline wrapper: {"e": "kline", "k": {kline_data}}
-        kline_data keys: t (open time), T (close time), o, h, l, c, v, x (is closed)
-        """
         if not self._on_candle:
             return
         try:
@@ -228,14 +201,6 @@ class BinanceFeed(BaseFeed):
             logger.debug("Binance kline parse error: %s", e)
 
     def _handle_depth(self, data: dict):
-        """
-        Parse partial book depth (depth10) → OrderBookSnapshot.
-
-        Binance depth fields:
-            b: [[price, qty], ...]  (bids)
-            a: [[price, qty], ...]  (asks)
-            T or E: timestamp
-        """
         try:
             ts_ms = data.get("T", data.get("E", int(time.time() * 1000)))
             ts = pd.Timestamp(int(ts_ms), unit="ms")

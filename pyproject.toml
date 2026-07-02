@@ -28,7 +28,10 @@ dependencies = [
     "orjson",
     "hyperliquid-python-sdk",
     "websockets",
-    "binance-futures-connector"
+    "binance-futures-connector",
+    "alpaca-py",
+    "websocket-client",
+    "aiohttp",
 ]
 [tool.setuptools]
 # 1. Map the root import path to the 'src' directory

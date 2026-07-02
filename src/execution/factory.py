@@ -11,9 +11,11 @@ No if/elif chains to maintain.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Callable
 
-from .base_executor_feed import BaseExecutor, BaseFeed, BaseBarBuilder
+from .base_executor_feed import BaseExecutor, BaseBarBuilder
+from core.feeds import BaseFeed
 from core.models import ExchangeCredentials
 
 logger = logging.getLogger(__name__)
@@ -46,7 +48,7 @@ def _make_binance_executor(cred: ExchangeCredentials) -> BaseExecutor:
 
 
 def _make_hyperliquid_feed(symbol: str, testnet: bool, **_) -> BaseFeed:
-    from .hyperliquid.hyperliquid_live_feed import HyperliquidFeed
+    from data.feeds.hyperliquid import HyperliquidFeed
     ws_url = (
         "wss://api.hyperliquid-testnet.xyz/ws" if testnet
         else "wss://api.hyperliquid.xyz/ws"
@@ -55,19 +57,39 @@ def _make_hyperliquid_feed(symbol: str, testnet: bool, **_) -> BaseFeed:
 
 
 def _make_binance_feed(symbol: str, testnet: bool, symbol_map=None, **_) -> BaseFeed:
-    from .binance.binance_live_feed import BinanceFeed
+    from data.feeds.binance import BinanceFeed
     binance_symbol = symbol_map.get(symbol) if symbol_map else None
     return BinanceFeed(symbol=symbol, testnet=testnet, binance_symbol=binance_symbol)
+
+
+def _make_alpaca_executor(cred: ExchangeCredentials) -> BaseExecutor:
+    from execution.alpaca.alpaca_executor import AlpacaExecutor
+    api_key = cred.api_key or os.getenv("ALP_PAPER_KEY", "")
+    api_secret = cred.api_secret or os.getenv("ALP_PAPER_SECRET", "")
+    if not api_key or not api_secret:
+        raise ValueError(
+            "Alpaca credentials missing — set ALP_PAPER_KEY and ALP_PAPER_SECRET in .env"
+        )
+    return AlpacaExecutor(api_key=api_key, api_secret=api_secret, paper=cred.testnet)
+
+
+def _make_alpaca_feed(symbol: str, testnet: bool = True, **_) -> BaseFeed:
+    from data.feeds.alpaca import AlpacaFeed
+    api_key = os.getenv("ALP_PAPER_KEY", "")
+    api_secret = os.getenv("ALP_PAPER_SECRET", "")
+    return AlpacaFeed(symbol=symbol, api_key=api_key, api_secret=api_secret, paper=testnet)
 
 
 EXECUTOR_REGISTRY: dict[str, Callable[[ExchangeCredentials], BaseExecutor]] = {
     "hyperliquid": _make_hyperliquid_executor,
     "binance": _make_binance_executor,
+    "alpaca": _make_alpaca_executor,
 }
 
 FEED_REGISTRY: dict[str, Callable[..., BaseFeed]] = {
     "hyperliquid": _make_hyperliquid_feed,
     "binance": _make_binance_feed,
+    "alpaca": _make_alpaca_feed,
 }
 
 

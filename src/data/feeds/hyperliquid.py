@@ -1,8 +1,11 @@
 """
-execution/hyperliquid_live_feed.py — Hyperliquid WebSocket feed (refactored).
+data/feeds/hyperliquid.py — Hyperliquid WebSocket feed for live trading.
 
-Now inherits from BaseFeed. The bar builder is imported from base_executor
-(exchange-agnostic BaseBarBuilder).
+Implements BaseFeed for the LiveEngine. Connects to the Hyperliquid WebSocket
+and dispatches trades, candles, and L2 snapshots via callbacks.
+
+Moved here from execution/hyperliquid/hyperliquid_live_feed.py so that
+execution/ owns only order placement and data/ owns all data acquisition.
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ import pandas as pd
 import websocket
 
 from core.models import OrderBookLevel, OrderBookSnapshot
-from ..base_executor_feed import BaseFeed, BaseBarBuilder
+from core.feeds import BaseFeed, BaseBarBuilder
 
 logger = logging.getLogger(__name__)
 

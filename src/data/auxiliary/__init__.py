@@ -1,6 +1,7 @@
 """
-data/auxiliary/ — Miscellaneous market data tools.
+data/auxiliary/ — Supplementary non-price market data, organised by category.
 
-  bid_ask.py   HL market microstructure scanner — spreads, funding, MM opportunity scoring
-  crypto.py    Macro REST poller — Binance OI, DeFiLlama stablecoin supply, Deribit vol index
+  market/      Market microstructure (bid/ask spreads, funding, MM opportunity scoring)
+  macro/       Macro REST pollers (open interest, stablecoin supply, volatility index)
+  sentiment/   Social sentiment scrapers (4chan, Reddit, Telegram)
 """

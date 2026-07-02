@@ -210,12 +210,6 @@ class SingleAssetStrategy(Strategy):
     ``setup_data(data, l2)`` for indicator pre-computation.
     ``setup``, ``generate``, and ``generate_all`` are auto-wired.
 
-    Migration from the old Signal API:
-      Signal.setup(data, l2)         →  SingleAssetStrategy.setup_data(data, l2)
-      Signal.generate(data, idx)     →  SingleAssetStrategy.bar(data, idx)
-      @register_signal("name")       →  @register_strategy("name")
-      SignalResult(target_side=...,  →  Allocation(side=..., weight=...)
-                   target_weight=...)
     """
 
     def __init__(self, symbol: str, **kw):
