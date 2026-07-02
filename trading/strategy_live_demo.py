@@ -15,8 +15,8 @@ from dotenv import load_dotenv
 
 import pandas as pd
 
-from core.models import LiveConfig, Side, Allocation
-from execution.live_engine import LiveEngine
+from core.models import LiveConfig, ExchangeCredentials, Side, Allocation
+from execution.single_exchange_engine import LiveEngine
 
 from strategy.base import SingleAssetStrategy, register_strategy
 from strategy.indicators import compute_atr_column, ema
@@ -82,15 +82,18 @@ def main():
 
     config = LiveConfig(
         exchange="hyperliquid",
-        account_address=creds["account_address"],
-        secret_key=creds["secret_key"],
         use_testnet=True,
+        exchanges=[ExchangeCredentials(
+            exchange="hyperliquid",
+            account_address=creds["account_address"],
+            secret_key=creds["secret_key"],
+            testnet=True,
+        )],
         symbol="ETH",
         bar_interval_s=60,
         warmup_bars=200,
         max_daily_trades=50,
         max_daily_loss_pct=5.0,
-        risk_per_trade=0.02,
         max_position_pct=0.25,
         leverage=1.0,
     )

@@ -1,7 +1,7 @@
 """
 execution/multi_exchange_engine.py — Multi-exchange live trading engine.
 
-Extracted from live_engine.py. Runs strategies across N exchanges with a
+Extracted from single_exchange_engine.py. Runs strategies across N exchanges with a
 shared MultiExchangePortfolio for cross-exchange hedging and net-exposure
 tracking.
 
@@ -50,7 +50,7 @@ from strategy.overlay import PortfolioOverlay
 from .base_executor_feed import BaseExecutor, BaseFeed, BaseBarBuilder, FillResult, MultiExchangePortfolio
 from .factory import create_executor, create_feed, create_bar_builder
 from .live_state import _AssetLiveState, LiveState
-from .live_engine import _ManualKillSwitch, _sizer_config_shim
+from .single_exchange_engine import _ManualKillSwitch, _sizer_config_shim
 
 logger = logging.getLogger(__name__)
 

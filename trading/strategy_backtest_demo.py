@@ -80,11 +80,8 @@ def demo():
 
     config = BacktestConfig(
         initial_capital=1000,
-        risk_per_trade=0.02,
         max_position_pct=0.25,
         leverage=1.0,
-        taker_fee_bps=5.0,
-        slippage_bps=1.0,
     )
 
     sizer = FixedNotionalSizer()

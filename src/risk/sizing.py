@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 from core.models import BacktestConfig, Position, Side, OrderBookSnapshot, Allocation
+from core.parser import timeframe_to_seconds
 
 
 # ── Sizing context ────────────────────────────────────────────────────────────
@@ -143,7 +144,7 @@ class FixedNotionalSizer(Sizer):
 
     @property
     def vectorizable(self) -> bool:
-        return self.notional is not None
+        return True
 
     def compute_vectorized(
         self,
@@ -151,7 +152,8 @@ class FixedNotionalSizer(Sizer):
         weights: np.ndarray,
         config: BacktestConfig,
     ) -> np.ndarray:
-        notional = self.notional * weights * config.leverage
+        base = self.notional if self.notional is not None else config.initial_capital * self.equity_pct
+        notional = base * weights * config.leverage
         return np.where(prices > 0, notional / prices, 0.0)
 
 
@@ -159,22 +161,22 @@ class VolatilityTargetSizer(Sizer):
     """
     Target a specific annualised portfolio volatility.
 
-    size = (target_vol * equity) / (realised_vol * price * √bars_per_year)
+    size = (target_vol * equity) / (realised_vol * price * √ann_factor)
     """
 
     def __init__(
-        self, target_vol: float = 0.15, lookback: int = 20, bars_per_year: int = 8760
+        self, target_vol: float = 0.15, lookback: int = 20, timeframe: str = "1h"
     ):
         self.target_vol = target_vol
         self.lookback = lookback
-        self.bars_per_year = bars_per_year
+        self.timeframe = timeframe
 
     @property
     def params(self):
         return dict(
             target_vol=self.target_vol,
             lookback=self.lookback,
-            bars_per_year=self.bars_per_year,
+            timeframe=self.timeframe,
         )
 
     def compute(self, ctx: SizingContext) -> float:
@@ -189,7 +191,7 @@ class VolatilityTargetSizer(Sizer):
             return ctx.equity * 0.01 * ctx.config.leverage / ctx.price
 
         bar_vol = rets.std()
-        ann_vol = bar_vol * np.sqrt(self.bars_per_year)
+        ann_vol = bar_vol * np.sqrt(int(365 * 24 * 3600 / timeframe_to_seconds(self.timeframe)))
 
         if ann_vol < 1e-12:
             return 0

@@ -49,7 +49,6 @@ from .parser import (
     parse_l2,
     align_l2_to_ohlcv,
     l2_to_orderbook,
-    trades_to_ohlc,
 )
 
 __all__ = [
@@ -66,5 +65,5 @@ __all__ = [
     # Events
     "BarEvent", "TradeEvent", "L2Event",
     # Parser
-    "parse_l2", "align_l2_to_ohlcv", "l2_to_orderbook", "trades_to_ohlc",
+    "parse_l2", "align_l2_to_ohlcv", "l2_to_orderbook",
 ]

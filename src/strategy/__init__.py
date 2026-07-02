@@ -28,11 +28,7 @@ from .base import (
     register_strategy,
     get_strategy,
     list_strategies,
-)
-
-# ── Cross-exchange strategy ──────────────────────────────────────────────────
-
-from .base import (
+    # Cross-exchange
     MultiExchangeTarget,
     CrossExchangeContext,
     CrossExchangeStrategy,
@@ -69,40 +65,6 @@ from .indicators import (
     compute_atr_column,
 )
 
-# ── Sizing ──────────────────────────────────────────────────────────────────
-
-from risk.sizing import (
-    Sizer,
-    SizingContext,
-    FixedFractionalSizer,
-    FixedNotionalSizer,
-    VolatilityTargetSizer,
-    KellySizer,
-    AntiMartingaleSizer,
-    DrawdownScalingSizer,
-    L2LiquiditySizer,
-    CompositeSizer,
-    default_sizer,
-)
-
-# ── Stop-loss ───────────────────────────────────────────────────────────────
-
-from risk.stops import (
-    StopLoss,
-    StopResult,
-    StopContext,
-    FixedPercentStop,
-    ATRStop,
-    TrailingStop,
-    TrailingATRStop,
-    BreakevenStop,
-    TimeStop,
-    RiskRewardStop,
-    CompositeStopLoss,
-    EmbeddedStop,
-    default_stop_loss,
-)
-
 # ── Overlays ────────────────────────────────────────────────────────────────
 
 from .overlay import (
@@ -132,16 +94,6 @@ __all__ = [
     "ema", "sma", "rsi", "atr", "bollinger",
     "vwap_rolling", "order_flow_imbalance", "book_imbalance",
     "compute_atr_column",
-    # Sizing
-    "Sizer", "SizingContext",
-    "FixedFractionalSizer", "FixedNotionalSizer", "VolatilityTargetSizer",
-    "KellySizer", "AntiMartingaleSizer", "DrawdownScalingSizer",
-    "L2LiquiditySizer", "CompositeSizer", "default_sizer",
-    # Stop-loss
-    "StopLoss", "StopResult", "StopContext",
-    "FixedPercentStop", "ATRStop", "TrailingStop", "TrailingATRStop",
-    "BreakevenStop", "TimeStop", "RiskRewardStop",
-    "CompositeStopLoss", "EmbeddedStop", "default_stop_loss",
     # Overlays
     "PortfolioOverlay", "NetExposureOverlay", "DeltaNeutralOverlay",
 ]

@@ -12,10 +12,9 @@ from .base_executor_feed import (
     BaseBarBuilder,
     MultiExchangePortfolio,
 )
-from core.feeds import BaseFeed
 from .live_state import LiveState, _AssetLiveState
 from .factory import create_executor, create_feed, create_bar_builder
-from .live_engine import LiveEngine, _ManualKillSwitch, _sizer_config_shim
+from .single_exchange_engine import LiveEngine, _ManualKillSwitch, _sizer_config_shim
 from .multi_exchange_engine import MultiExchangeEngine
 
 # Executors (exchange-specific order placement)
@@ -24,7 +23,7 @@ from .binance.binance_executor import BinanceExecutor
 from .alpaca.alpaca_executor import AlpacaExecutor
 
 # Feeds now live in data/feeds/ (canonical data acquisition layer)
-from data.feeds.hyperliquid import HyperliquidFeed, HyperliquidBarBuilder
+from data.feeds.hyperliquid import HyperliquidFeed
 from data.feeds.binance import BinanceFeed
 from data.feeds.alpaca import AlpacaFeed
 
@@ -33,7 +32,7 @@ from core.models import FillResult
 
 __all__ = [
     # Abstract base
-    "BaseExecutor", "BaseFeed", "BaseBarBuilder",
+    "BaseExecutor", "BaseBarBuilder",
     # Portfolio aggregator
     "MultiExchangePortfolio",
     # State containers
@@ -47,7 +46,7 @@ __all__ = [
     # Fill result
     "FillResult",
     # Hyperliquid
-    "HyperliquidExecutor", "HyperliquidFeed", "HyperliquidBarBuilder",
+    "HyperliquidExecutor", "HyperliquidFeed",
     # Binance
     "BinanceExecutor", "BinanceFeed",
     # Alpaca

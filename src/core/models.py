@@ -11,13 +11,8 @@ import enum
 from dataclasses import dataclass, field
 from typing import Any
 
-import logging
-
 import numpy as np
 import pandas as pd
-
-
-logger = logging.getLogger(__name__)
 
 
 # ── Enums ────────────────────────────────────────────────────────────────────
@@ -215,18 +210,9 @@ class FillResult:
 @dataclass
 class BacktestConfig:
     initial_capital: float = 100_000.0
-    position_sizing: str = "fixed_fractional"
-    risk_per_trade: float = 0.02
     max_position_pct: float = 0.25
     use_l2_fills: bool = False
-    maker_fee_bps: float = 2.0
-    taker_fee_bps: float = 5.0
-    funding_rate_annual_bps: float = 0.0
-    slippage_model: str = "fixed"
-    slippage_bps: float = 1.0
-    margin_type: str = "cross"
     leverage: float = 1.0
-    export_path: str = "backtest_output"
 
 
 @dataclass
@@ -254,10 +240,6 @@ class LiveConfig:
 
     # ── Exchange credentials ─────────────────────────────────────────────
     exchange: str = "hyperliquid"
-    account_address: str = ""
-    secret_key: str = ""
-    api_key: str = ""
-    api_secret: str = ""
     use_testnet: bool = True
     exchanges: list[ExchangeCredentials] | None = None
 
@@ -271,7 +253,6 @@ class LiveConfig:
     max_bars_in_memory: int = 2000
 
     # ── Position sizing / risk ───────────────────────────────────────────
-    risk_per_trade: float = 0.02
     max_position_pct: float = 0.25
     leverage: float = 1.0
     margin_type: str = "cross"
@@ -332,16 +313,9 @@ class LiveConfig:
         return ""
 
     def get_credentials(self) -> list[ExchangeCredentials]:
-        if self.exchanges:
-            return list(self.exchanges)
-        return [ExchangeCredentials(
-            exchange=self.exchange,
-            api_key=self.api_key,
-            api_secret=self.api_secret,
-            account_address=self.account_address,
-            secret_key=self.secret_key,
-            testnet=self.use_testnet,
-        )]
+        if not self.exchanges:
+            raise ValueError("LiveConfig.exchanges must be set before calling get_credentials()")
+        return list(self.exchanges)
 
 
 # ── Portfolio aggregation ─────────────────────────────────────────────────────

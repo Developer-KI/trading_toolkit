@@ -15,23 +15,28 @@ from core.models import FundingSnapshot, OrderBookSnapshot, OrderBookLevel
 
 # ── Timeframe registry ────────────────────────────────────────────────────────
 
-# (pandas_resample_freq, seconds_per_bar, approx_bars_per_year)
-# bars_per_year = 365 * 24 * 3600 / seconds_per_bar
-_TIMEFRAME_MAP: dict[str, tuple[str, int, int]] = {
-    "1m":  ("1min",   60,      525_600),
-    "2m":  ("2min",   120,     262_800),
-    "3m":  ("3min",   180,     175_200),
-    "5m":  ("5min",   300,     105_120),
-    "10m": ("10min",  600,      52_560),
-    "15m": ("15min",  900,      35_040),
-    "30m": ("30min",  1_800,    17_520),
-    "1h":  ("1h",     3_600,     8_760),
-    "2h":  ("2h",     7_200,     4_380),
-    "4h":  ("4h",    14_400,     2_190),
-    "6h":  ("6h",    21_600,     1_460),
-    "8h":  ("8h",    28_800,     1_095),
-    "12h": ("12h",   43_200,       730),
-    "1d":  ("1D",    86_400,       365),
+# (pandas_resample_freq, seconds_per_bar)
+_TIMEFRAME_MAP: dict[str, tuple[str, int]] = {
+    "1s":  ("1s",     1),
+    "2s":  ("2s",     2),
+    "5s":  ("5s",     5),
+    "10s": ("10s",    10),
+    "15s": ("15s",    15),
+    "30s": ("30s",    30),
+    "1m":  ("1min",   60),
+    "2m":  ("2min",   120),
+    "3m":  ("3min",   180),
+    "5m":  ("5min",   300),
+    "10m": ("10min",  600),
+    "15m": ("15min",  900),
+    "30m": ("30min",  1_800),
+    "1h":  ("1h",     3_600),
+    "2h":  ("2h",     7_200),
+    "4h":  ("4h",    14_400),
+    "6h":  ("6h",    21_600),
+    "8h":  ("8h",    28_800),
+    "12h": ("12h",   43_200),
+    "1d":  ("1D",    86_400),
 }
 
 TIMEFRAMES = list(_TIMEFRAME_MAP.keys())
@@ -51,14 +56,6 @@ def timeframe_to_seconds(tf: str) -> int:
     if entry is None:
         raise ValueError(f"Unknown timeframe '{tf}'. Valid: {TIMEFRAMES}")
     return entry[1]
-
-
-def timeframe_to_bars_per_year(tf: str) -> int:
-    """Return approximate number of bars per calendar year for a timeframe label."""
-    entry = _TIMEFRAME_MAP.get(tf)
-    if entry is None:
-        raise ValueError(f"Unknown timeframe '{tf}'. Valid: {TIMEFRAMES}")
-    return entry[2]
 
 
 # ── OHLCV from raw trades ─────────────────────────────────────────────────────
@@ -89,11 +86,6 @@ def trades_to_ohlcv(
     ohlcv = data["price"].resample(pandas_freq).ohlc().dropna()
     ohlcv["volume"] = data["size"].resample(pandas_freq).sum()
     return ohlcv
-
-
-def trades_to_ohlc(input_folder: str | Path) -> pd.DataFrame:
-    """Backward-compatible alias for trades_to_ohlcv with 1-minute bars."""
-    return trades_to_ohlcv(input_folder, timeframe="1m")
 
 
 # ── Funding rate parsing ──────────────────────────────────────────────────────

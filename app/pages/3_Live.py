@@ -86,8 +86,6 @@ with col_cfg:
 
     # Risk
     st.markdown("**Risk**")
-    risk_per_trade = st.number_input("Risk per trade", value=0.02, step=0.005,
-                                      min_value=0.001, max_value=0.25, key="live_rpt", disabled=disabled)
     max_pos_pct = st.number_input("Max position %", value=0.25, step=0.05,
                                    min_value=0.01, max_value=1.0, key="live_mpp", disabled=disabled)
     leverage = st.number_input("Leverage", value=1.0, step=0.5,
@@ -141,19 +139,23 @@ with col_cfg:
 if start_pressed and live_signal_cls is not None:
     try:
         from core.models import LiveConfig
-        from execution.live_engine import LiveEngine
+        from execution.single_exchange_engine import LiveEngine
 
+        from core.models import ExchangeCredentials
         config = LiveConfig(
             exchange=exchange,
-            account_address=addr,
-            secret_key=secret,
-            api_key=api_key,
-            api_secret=api_secret,
             use_testnet=use_testnet,
+            exchanges=[ExchangeCredentials(
+                exchange=exchange,
+                account_address=addr,
+                secret_key=secret,
+                api_key=api_key,
+                api_secret=api_secret,
+                testnet=use_testnet,
+            )],
             symbol=symbol,
             bar_interval_s=timeframe_to_seconds(live_timeframe),
             warmup_bars=int(warmup_bars),
-            risk_per_trade=risk_per_trade,
             max_position_pct=max_pos_pct,
             leverage=leverage,
             max_daily_trades=int(max_daily_trades),

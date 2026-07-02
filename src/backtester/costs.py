@@ -60,7 +60,7 @@ class CostModel(abc.ABC):
 class ExchangeFeeCost(CostModel):
     """Flat maker/taker fee in basis points."""
 
-    def __init__(self, maker_bps: float | None = None, taker_bps: float | None = None):
+    def __init__(self, maker_bps: float = 2.0, taker_bps: float = 5.0):
         self.maker_bps = maker_bps
         self.taker_bps = taker_bps
 
@@ -69,18 +69,14 @@ class ExchangeFeeCost(CostModel):
         return dict(maker_bps=self.maker_bps, taker_bps=self.taker_bps)
 
     def compute(self, price, size, side, config, l2=None, bar_data=None):
-        maker = self.maker_bps if self.maker_bps is not None else config.maker_fee_bps
-        taker = self.taker_bps if self.taker_bps is not None else config.taker_fee_bps
-        # Assume market orders → taker; limit → maker
-        fee_bps = taker  # default to taker for backtest conservatism
         notional = price * abs(size)
-        return notional * fee_bps / 1e4
+        return notional * self.taker_bps / 1e4
 
 
 class FixedSlippageCost(CostModel):
     """Constant slippage in basis points."""
 
-    def __init__(self, slippage_bps: float | None = None):
+    def __init__(self, slippage_bps: float = 1.0):
         self.slippage_bps = slippage_bps
 
     @property
@@ -88,10 +84,7 @@ class FixedSlippageCost(CostModel):
         return dict(slippage_bps=self.slippage_bps)
 
     def compute(self, price, size, side, config, l2=None, bar_data=None):
-        bps = (
-            self.slippage_bps if self.slippage_bps is not None else config.slippage_bps
-        )
-        return price * abs(size) * bps / 1e4
+        return price * abs(size) * self.slippage_bps / 1e4
 
 
 class ProportionalSlippageCost(CostModel):
@@ -160,11 +153,10 @@ class FundingRateCost(CostModel):
     Priority for the funding rate (highest → lowest):
       1. ``bar_data["funding_rate_ann_bps"]`` — actual per-bar snapshot
          injected by the engine from ``FundingSnapshot.rate_annualized``.
-      2. ``self.annual_bps`` — explicit override set on this cost model.
-      3. ``config.funding_rate_annual_bps`` — global backtest default.
+      2. ``self.annual_bps`` — explicit value set on this cost model.
     """
 
-    def __init__(self, annual_bps: float | None = None, bars_per_day: float = 24):
+    def __init__(self, annual_bps: float = 0.0, bars_per_day: float = 24):
         self.annual_bps = annual_bps
         self.bars_per_day = bars_per_day
 
@@ -174,15 +166,7 @@ class FundingRateCost(CostModel):
 
     def compute(self, price, size, side, config, l2=None, bar_data=None):
         bar = bar_data or {}
-
-        # 1. Actual per-bar funding snapshot (injected by the engine)
-        if "funding_rate_ann_bps" in bar:
-            ann = bar["funding_rate_ann_bps"]
-        elif self.annual_bps is not None:
-            ann = self.annual_bps
-        else:
-            ann = config.funding_rate_annual_bps
-
+        ann = bar.get("funding_rate_ann_bps", self.annual_bps)
         per_bar_bps = ann / (365 * self.bars_per_day)
         return price * abs(size) * per_bar_bps / 1e4
 
@@ -214,6 +198,20 @@ class MarketImpactCost(CostModel):
         participation = abs(size) / max(adv, 1e-12)
         impact = self.impact_coef * sigma * np.sqrt(participation)
         return impact * abs(size)
+
+
+# ── Null (frictionless baseline) ─────────────────────────────────────────────
+
+
+class NullCostModel(CostModel):
+    """Zero-cost model — frictionless baseline used when no cost model is supplied."""
+
+    @property
+    def params(self) -> dict:
+        return {}
+
+    def compute(self, price, size, side, config, l2=None, bar_data=None) -> float:
+        return 0.0
 
 
 # ── Composite (stack multiple cost components) ───────────────────────────────

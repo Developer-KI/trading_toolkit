@@ -120,25 +120,31 @@ No module imports upward or sideways outside this DAG.
 
 All parsers accept a `timeframe` string. Supported values:
 
-| Label | Bar size | Bars / year |
-|-------|----------|-------------|
-| `"1m"` | 1 minute | 525,600 |
-| `"2m"` | 2 minutes | 262,800 |
-| `"3m"` | 3 minutes | 175,200 |
-| `"5m"` | 5 minutes | 105,120 |
-| `"10m"` | 10 minutes | 52,560 |
-| `"15m"` | 15 minutes | 35,040 |
-| `"30m"` | 30 minutes | 17,520 |
-| `"1h"` | 1 hour | 8,760 |
-| `"2h"` | 2 hours | 4,380 |
-| `"4h"` | 4 hours | 2,190 |
-| `"6h"` | 6 hours | 1,460 |
-| `"8h"` | 8 hours | 1,095 |
-| `"12h"` | 12 hours | 730 |
-| `"1d"` | 1 day | 365 |
+| Label | Bar size | Seconds |
+|-------|----------|---------|
+| `"1s"` | 1 second | 1 |
+| `"2s"` | 2 seconds | 2 |
+| `"5s"` | 5 seconds | 5 |
+| `"10s"` | 10 seconds | 10 |
+| `"15s"` | 15 seconds | 15 |
+| `"30s"` | 30 seconds | 30 |
+| `"1m"` | 1 minute | 60 |
+| `"2m"` | 2 minutes | 120 |
+| `"3m"` | 3 minutes | 180 |
+| `"5m"` | 5 minutes | 300 |
+| `"10m"` | 10 minutes | 600 |
+| `"15m"` | 15 minutes | 900 |
+| `"30m"` | 30 minutes | 1,800 |
+| `"1h"` | 1 hour | 3,600 |
+| `"2h"` | 2 hours | 7,200 |
+| `"4h"` | 4 hours | 14,400 |
+| `"6h"` | 6 hours | 21,600 |
+| `"8h"` | 8 hours | 28,800 |
+| `"12h"` | 12 hours | 43,200 |
+| `"1d"` | 1 day | 86,400 |
 
 ```python
-from core.parser import TIMEFRAMES, timeframe_to_seconds, timeframe_to_bars_per_year
+from core.parser import TIMEFRAMES, timeframe_to_seconds
 ```
 
 ### OHLCV

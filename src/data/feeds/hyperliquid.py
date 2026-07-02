@@ -24,10 +24,6 @@ from core.feeds import BaseFeed, BaseBarBuilder
 
 logger = logging.getLogger(__name__)
 
-# Re-export the generic bar builder under the old name for backward compat
-HyperliquidBarBuilder = BaseBarBuilder
-
-
 class HyperliquidFeed(BaseFeed):
     """Hyperliquid WebSocket feed for one symbol."""
 

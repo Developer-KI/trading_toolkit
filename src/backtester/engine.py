@@ -34,8 +34,8 @@ from core.models import (
     Side,
     Trade,
 )
-from core.parser import timeframe_to_bars_per_year, TIMEFRAMES
-from backtester.costs import CostModel, CompositeCostModel
+from core.parser import timeframe_to_seconds
+from backtester.costs import CostModel, CompositeCostModel, NullCostModel
 from risk.sizing import Sizer, SizingContext, default_sizer
 from risk.stops import (
     StopLoss,
@@ -46,6 +46,12 @@ from risk.stops import (
 
 from strategy.base import Strategy, StrategyContext
 from strategy.universe import Universe
+
+
+def _cost_model_label(m: CostModel) -> "str | list[str]":
+    if isinstance(m, CompositeCostModel):
+        return [type(c).__name__ for c in m.models]
+    return type(m).__name__
 
 
 # ── Result container (superset of old BacktestResult) ────────────────────────
@@ -102,8 +108,12 @@ class BacktestResult:
         n_bars = len(eq)
 
         ann_factor = 365 * 24 if n_bars > 1 else 1
-        if "bars_per_year" in self.meta:
-            ann_factor = self.meta["bars_per_year"]
+        if "timeframe" in self.meta:
+            ann_factor = int(365 * 24 * 3600 / timeframe_to_seconds(self.meta["timeframe"]))
+        elif isinstance(eq.index, pd.DatetimeIndex) and len(eq.index) > 2:
+            secs = eq.index.to_series().diff().median().total_seconds()
+            if secs > 0:
+                ann_factor = int(365 * 24 * 3600 / secs)
 
         ann_return = (1 + total_return) ** (ann_factor / max(n_bars, 1)) - 1
         ann_vol = returns.std() * np.sqrt(ann_factor) if len(returns) > 1 else 0
@@ -175,18 +185,37 @@ class BacktestResult:
             2, 1, figsize=(14, 8), sharex=True,
             gridspec_kw={"height_ratios": [3, 1]},
         )
-        eq = self.equity_curve
-        peak = eq.cummax()
-        dd = (eq - peak) / peak
 
-        ax1.plot(eq.index, eq.values, linewidth=1.2, color="#2563eb", label="Equity")
-        ax1.fill_between(eq.index, eq.values, alpha=0.08, color="#2563eb")
-        ax1.set_ylabel("Equity")
-        ax1.set_title("Equity Curve")
+        eq = self.equity_curve
+        # Normalise to 1.0 at start so curves are comparable regardless of capital
+        norm = eq / eq.iloc[0] if eq.iloc[0] != 0 else eq
+        peak = norm.cummax()
+        dd = (norm - peak) / peak
+
+        ax1.plot(norm.index, norm.values, linewidth=1.2, color="#2563eb", label="Equity")
+        ax1.fill_between(norm.index, norm.values, 1.0, where=(norm.values >= 1.0),
+                         alpha=0.08, color="#2563eb")
+        ax1.fill_between(norm.index, norm.values, 1.0, where=(norm.values < 1.0),
+                         alpha=0.08, color="#dc2626")
+        ax1.axhline(1.0, color="#6b7280", linewidth=0.8, linestyle="--", alpha=0.7)
+        ax1.yaxis.set_major_formatter(
+            plt.FuncFormatter(lambda y, _: f"{y:.2f}×")
+        )
+        summary = self.summary()
+        title_parts = [
+            f"Total: {summary['total_return_pct']:+.1f}%",
+            f"Sharpe: {summary['sharpe_ratio']:.2f}",
+            f"Max DD: {summary['max_drawdown_pct']:.1f}%",
+        ]
+        symbols = self.meta.get("symbols")
+        label = ", ".join(symbols) if symbols else "Equity"
+        ax1.set_ylabel("Normalised equity")
+        ax1.set_title(f"{label}  —  " + "  |  ".join(title_parts))
         ax1.legend(loc="upper left")
         ax1.grid(True, alpha=0.3)
 
-        ax2.fill_between(dd.index, dd.values, 0, color="#dc2626", alpha=0.4)
+        ax2.fill_between(dd.index, dd.values * 100, 0, color="#dc2626", alpha=0.4)
+        ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:.0f}%"))
         ax2.set_ylabel("Drawdown")
         ax2.set_xlabel("Time")
         ax2.grid(True, alpha=0.3)
@@ -306,7 +335,6 @@ class Backtester:
         l2: list[OrderBookSnapshot] | None = None,
         universe: Universe | None = None,
         timeframe: str | None = None,
-        bars_per_year: int | None = None,
     ) -> BacktestResult:
         """
         Run backtest.
@@ -314,18 +342,14 @@ class Backtester:
         Old API:  result = bt.run(data=df, l2=snapshots)
         New API:  result = bt.run(universe=universe, timeframe="1h")
 
-        timeframe     — bar size label (e.g. "1m", "5m", "1h", "1d").
-                        Used to compute bars_per_year for annualisation.
-                        Takes precedence over bars_per_year when both supplied.
-        bars_per_year — explicit override; ignored when timeframe is set.
+        timeframe — bar size label (e.g. "1m", "5m", "1h", "1d").
+                    Used to compute the annualisation factor for Sharpe/vol metrics.
+                    When omitted the factor is inferred from the bar index spacing.
         """
-        # ── Resolve strategy + universe from whatever was provided ────────
-
         if data is not None and universe is not None:
             raise ValueError("Provide data= or universe=, not both")
 
         if data is not None:
-            # Single DataFrame → wrap into Universe
             sym = self._default_symbol
             universe = Universe(symbols=[sym])
             universe.add_asset(sym, data, l2=l2)
@@ -338,17 +362,11 @@ class Backtester:
         symbols = universe.symbols
         is_single_asset = len(symbols) == 1
 
-        # timeframe takes precedence over the legacy bars_per_year param
-        resolved_bpy = bars_per_year
-        if timeframe is not None:
-            resolved_bpy = timeframe_to_bars_per_year(timeframe)
-
         return self._run_loop(
             strategy=strategy,
             universe=universe,
             symbols=symbols,
             is_single_asset=is_single_asset,
-            bars_per_year=resolved_bpy,
             timeframe=timeframe,
         )
 
@@ -375,7 +393,6 @@ class Backtester:
         universe: Universe,
         symbols: list[str],
         is_single_asset: bool,
-        bars_per_year: int | None,
         timeframe: str | None,
         index,
         n_bars: int,
@@ -564,10 +581,13 @@ class Backtester:
             pos_series = pd.Series(np.zeros(n_bars, dtype=np.int8), index=index, name="position")
             sig_df = pd.DataFrame()
 
+        sym0 = symbols[0]
         meta: dict[str, Any] = {
-            "bars_per_year": bars_per_year,
             "symbols": symbols,
             "vectorized": True,
+            "sizer": type(sizers[sym0]).__name__,
+            "stop_loss": "NopStopLoss",
+            "cost_model": _cost_model_label(cost_models[sym0]),
         }
         if timeframe is not None:
             meta["timeframe"] = timeframe
@@ -592,7 +612,6 @@ class Backtester:
         universe: Universe,
         symbols: list[str],
         is_single_asset: bool,
-        bars_per_year: int | None,
         timeframe: str | None = None,
     ) -> BacktestResult:
         t0 = time.perf_counter()
@@ -608,14 +627,6 @@ class Backtester:
                 index = universe.ohlcv(symbols[0]).index
         n_bars = len(index)
 
-        if bars_per_year is None:
-            if isinstance(index, pd.DatetimeIndex) and len(index) > 2:
-                median_delta = index.to_series().diff().median()
-                secs = median_delta.total_seconds()
-                bars_per_year = int(365 * 24 * 3600 / secs) if secs > 0 else 8760
-            else:
-                bars_per_year = 8760
-
         strategy.setup(universe)
 
         states: dict[str, _AssetState] = {}
@@ -626,7 +637,7 @@ class Backtester:
                 stop_loss=self._resolve(self._stop_loss_spec, sym, default_stop_loss),
             )
             sizers[sym] = self._resolve(self._sizer_spec, sym, default_sizer)
-            cost_models[sym] = self._resolve(self._cost_model_spec, sym, CompositeCostModel)
+            cost_models[sym] = self._resolve(self._cost_model_spec, sym, NullCostModel)
 
         # ── Try vectorised fast path ──────────────────────────────────────
         if self._can_vectorize(symbols, states, sizers):
@@ -635,7 +646,7 @@ class Backtester:
                 sides_all, weights_all = batch
                 return self._run_vectorized(
                     t0, sides_all, weights_all, universe, symbols,
-                    is_single_asset, bars_per_year, timeframe,
+                    is_single_asset, timeframe,
                     index, n_bars, sizers, cost_models,
                 )
 
@@ -1086,7 +1097,14 @@ class Backtester:
         else:
             sig_df = pd.DataFrame(alloc_log_rows) if alloc_log_rows else pd.DataFrame()
 
-        meta: dict[str, Any] = {"bars_per_year": bars_per_year, "symbols": symbols}
+        sym0 = symbols[0]
+        meta: dict[str, Any] = {
+            "symbols": symbols,
+            "vectorized": False,
+            "sizer": type(sizers[sym0]).__name__,
+            "stop_loss": type(states[sym0].stop_loss).__name__,
+            "cost_model": _cost_model_label(cost_models[sym0]),
+        }
         if timeframe is not None:
             meta["timeframe"] = timeframe
 

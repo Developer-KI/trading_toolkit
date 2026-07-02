@@ -18,7 +18,7 @@ def _num(container, label: str, value: float, key: str,
 
 @st.cache_resource
 def _load_signal_modules():
-    """Import known signal modules once so their @register_signal decorators fire."""
+    """Import known strategy modules once so their @register_strategy decorators fire."""
     for mod in [
         "strategy.built_in",
         "trading.strategy_live_demo",
@@ -34,19 +34,19 @@ def _load_signal_modules():
 
 def signal_form(container, key_prefix: str = "sig") -> tuple[type | None, dict]:
     """
-    Signal selector + auto-generated param fields.
-    Returns (signal_cls, params_dict) or (None, {}) if no signals registered.
+    Strategy selector + auto-generated param fields.
+    Returns (strategy_cls, params_dict) or (None, {}) if no strategies registered.
     """
     _load_signal_modules()
-    from strategy.base import list_signals, get_signal
+    from strategy.base import list_strategies, get_strategy
 
-    signals = list_signals()
+    signals = list_strategies()
     if not signals:
-        container.warning("No signals registered. Add signals with @register_signal.")
+        container.warning("No strategies registered. Add strategies with @register_strategy.")
         return None, {}
 
     name = container.selectbox("Signal", signals, key=f"{key_prefix}_name")
-    signal_cls = get_signal(name)
+    signal_cls = get_strategy(name)
 
     # Reflect constructor defaults for simple scalar params
     sig = inspect.signature(signal_cls.__init__)
@@ -129,15 +129,12 @@ def stop_form(container, key_prefix: str = "stop"):
     Stop-loss selector + param fields.
     Returns an instantiated StopLoss.
     """
-    from risk.stops import SignalStop, FixedPercentStop, ATRStop, TrailingStop, RiskRewardStop
+    from risk.stops import FixedPercentStop, ATRStop, TrailingStop, RiskRewardStop
 
-    OPTIONS = ["Signal (deferred)", "Fixed Percent", "ATR", "Trailing", "Risk/Reward"]
+    OPTIONS = ["Fixed Percent", "ATR", "Trailing", "Risk/Reward"]
     choice = container.radio("Stop loss", OPTIONS, key=f"{key_prefix}_choice")
 
-    if choice == "Signal (deferred)":
-        return SignalStop()
-
-    elif choice == "Fixed Percent":
+    if choice == "Fixed Percent":
         sl = _num(container, "SL %", 2.0, f"{key_prefix}_sl", step=0.1, min_val=0.1)
         use_tp = container.checkbox("Set take profit", value=False, key=f"{key_prefix}_use_tp")
         tp = _num(container, "TP %", 4.0, f"{key_prefix}_tp", step=0.1, min_val=0.1) if use_tp else None
@@ -167,21 +164,11 @@ def backtest_config_form(container, key_prefix: str = "btcfg"):
 
     container.markdown("**Capital & risk**")
     cap = _num(container, "Initial capital ($)", 10_000.0, f"{key_prefix}_cap", step=1000.0, min_val=100.0)
-    rpt = _num(container, "Risk per trade", 0.02, f"{key_prefix}_rpt", step=0.005, min_val=0.001, max_val=0.25)
     mpp = _num(container, "Max position %", 0.25, f"{key_prefix}_mpp", step=0.05, min_val=0.01, max_val=1.0)
     lev = _num(container, "Leverage", 1.0, f"{key_prefix}_lev", step=0.5, min_val=1.0, max_val=20.0)
 
-    container.markdown("**Costs**")
-    taker = _num(container, "Taker fee (bps)", 5.0, f"{key_prefix}_taker", step=0.5, min_val=0.0)
-    maker = _num(container, "Maker fee (bps)", 2.0, f"{key_prefix}_maker", step=0.5, min_val=0.0)
-    slip = _num(container, "Slippage (bps)", 1.0, f"{key_prefix}_slip", step=0.5, min_val=0.0)
-
     return BacktestConfig(
         initial_capital=cap,
-        risk_per_trade=rpt,
         max_position_pct=mpp,
         leverage=lev,
-        taker_fee_bps=taker,
-        maker_fee_bps=maker,
-        slippage_bps=slip,
     )

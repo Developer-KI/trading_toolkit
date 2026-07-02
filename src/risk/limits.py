@@ -1,7 +1,7 @@
 """
 risk/limits.py — Hard risk limits enforced at runtime.
 
-Extracted from execution/live_engine.py so risk rules live in one place
+Extracted from execution/single_exchange_engine.py so risk rules live in one place
 and can be tested independently of the execution engine.
 
 Dependency: core/ only.

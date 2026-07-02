@@ -589,14 +589,15 @@ class StrategyStressTest:
     def run(
         self,
         universe: Universe,
-        bars_per_year: int | None = None,
+        timeframe: str | None = None,
     ) -> StressResult:
         """
         Run parameter sweep over the strategy.
 
         Args:
-            universe:       Multi-asset Universe containing all OHLCV + aux data.
-            bars_per_year:  Optional override for annualisation factor.
+            universe:   Multi-asset Universe containing all OHLCV + aux data.
+            timeframe:  Bar size label (e.g. "1m", "1h") for annualisation.
+                        When omitted, inferred from the bar index spacing.
 
         Returns:
             StressResult with one row per parameter combination.
@@ -620,7 +621,7 @@ class StrategyStressTest:
             try:
                 res = bt.run(
                     universe=copy.deepcopy(universe),
-                    bars_per_year=bars_per_year,
+                    timeframe=timeframe,
                 )
                 summary = res.summary()
                 key = str(combo)

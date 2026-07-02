@@ -3,7 +3,7 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ventuals"
+name = "toolkit"
 version = "0.1.0"
 # This tells pip to look for your code
 dependencies = [
@@ -34,9 +34,9 @@ dependencies = [
     "aiohttp",
 ]
 [tool.setuptools]
-# 1. Map the root import path to the 'src' directory
+# Map the root import path to the 'src' directory
 package-dir = {"" = "src"}
 
-# 2. Tell it to find all sub-packages (folders with __init__.py) inside 'src'
+# Tell it to find all sub-packages inside 'src'
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -1,7 +1,7 @@
 """
 execution/live_state.py — Per-asset and portfolio-level state containers.
 
-Extracted from live_engine.py so state data is decoupled from engine logic.
+Extracted from single_exchange_engine.py so state data is decoupled from engine logic.
 These are pure data holders with no side effects — easy to serialize,
 inspect, and eventually replace with C++ structs.
 """
@@ -49,11 +49,3 @@ class LiveState:
             return next(iter(self.positions.values()))
         return Position()
 
-    # Backward-compat alias
-    @property
-    def signal_setup_done(self) -> bool:
-        return self.strategy_setup_done
-
-    @signal_setup_done.setter
-    def signal_setup_done(self, v: bool):
-        self.strategy_setup_done = v

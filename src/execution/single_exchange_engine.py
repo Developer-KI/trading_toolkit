@@ -1,5 +1,5 @@
 """
-execution/live_engine.py — Single-exchange live trading engine.
+execution/single_exchange_engine.py — Single-exchange live trading engine.
 
 MultiExchangeEngine has been extracted to multi_exchange_engine.py.
 LiveState and _AssetLiveState have been extracted to live_state.py.
@@ -98,10 +98,8 @@ def _sizer_config_shim(config: LiveConfig, equity: float) -> BacktestConfig:
     """Bridge LiveConfig fields into a BacktestConfig for sizer.compute()."""
     return BacktestConfig(
         initial_capital=equity,
-        risk_per_trade=config.risk_per_trade,
         max_position_pct=config.max_position_pct,
         leverage=config.leverage,
-        margin_type=config.margin_type,
     )
 
 
@@ -573,6 +571,6 @@ class LiveEngine:
             format=log_fmt,
             handlers=[
                 logging.StreamHandler(),
-                logging.FileHandler(os.path.join(self._run_log_dir, "live_engine.log"), mode="a"),
+                logging.FileHandler(os.path.join(self._run_log_dir, "single_exchange_engine.log"), mode="a"),
             ],
         )
