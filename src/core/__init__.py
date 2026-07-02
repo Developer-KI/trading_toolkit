@@ -51,6 +51,14 @@ from .parser import (
     l2_to_orderbook,
 )
 
+from .universe import (
+    DataSource,
+    StaticDataSource,
+    CallableDataSource,
+    AssetData,
+    Universe,
+)
+
 __all__ = [
     # Models
     "Side", "OrderType",
@@ -66,4 +74,7 @@ __all__ = [
     "BarEvent", "TradeEvent", "L2Event",
     # Parser
     "parse_l2", "align_l2_to_ohlcv", "l2_to_orderbook",
+    # Universe
+    "DataSource", "StaticDataSource", "CallableDataSource",
+    "AssetData", "Universe",
 ]

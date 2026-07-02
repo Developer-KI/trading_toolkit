@@ -14,7 +14,6 @@ Supported timeframes: 1Min 5Min 15Min 30Min 1H 4H 1D
 from __future__ import annotations
 
 import argparse
-import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,9 +21,10 @@ from pathlib import Path
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values
 
 load_dotenv()
+_env = dotenv_values()
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = PROJECT_ROOT / "data" / "cleaned" / "historical" / "alpaca"
@@ -49,8 +49,8 @@ def _build_timeframe(tf: str):
 
 
 def _get_credentials() -> tuple[str, str]:
-    key = os.getenv("ALP_PAPER_KEY", "")
-    secret = os.getenv("ALP_PAPER_SECRET", "")
+    key = _env.get("ALP_PAPER_KEY", "")
+    secret = _env.get("ALP_PAPER_SECRET", "")
     if not key or not secret:
         raise ValueError(
             "Missing credentials — set ALP_PAPER_KEY and ALP_PAPER_SECRET in .env"

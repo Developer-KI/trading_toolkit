@@ -1,11 +1,7 @@
 """
-risk/stops.py — Modular stop-loss and take-profit framework.
+strategy/stops.py — Modular stop-loss and take-profit framework.
 
-Moved here from strategy/stoploss.py so the risk layer is independent of the
-strategy layer. strategy/stoploss.py now re-exports from here for backward
-compatibility.
-
-Dependency: core/ only — no imports from strategy/ or execution/.
+Dependency: core/ only — no imports from execution/.
 """
 
 from __future__ import annotations

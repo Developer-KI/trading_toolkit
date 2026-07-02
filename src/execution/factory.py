@@ -11,8 +11,10 @@ No if/elif chains to maintain.
 from __future__ import annotations
 
 import logging
-import os
+from dotenv import dotenv_values
 from typing import Callable
+
+_env = dotenv_values()
 
 from .base_executor_feed import BaseExecutor, BaseBarBuilder
 from core.feeds import BaseFeed
@@ -64,8 +66,8 @@ def _make_binance_feed(symbol: str, testnet: bool, symbol_map=None, **_) -> Base
 
 def _make_alpaca_executor(cred: ExchangeCredentials) -> BaseExecutor:
     from execution.alpaca.alpaca_executor import AlpacaExecutor
-    api_key = cred.api_key or os.getenv("ALP_PAPER_KEY", "")
-    api_secret = cred.api_secret or os.getenv("ALP_PAPER_SECRET", "")
+    api_key = cred.api_key or _env.get("ALP_PAPER_KEY", "")
+    api_secret = cred.api_secret or _env.get("ALP_PAPER_SECRET", "")
     if not api_key or not api_secret:
         raise ValueError(
             "Alpaca credentials missing — set ALP_PAPER_KEY and ALP_PAPER_SECRET in .env"
@@ -75,8 +77,8 @@ def _make_alpaca_executor(cred: ExchangeCredentials) -> BaseExecutor:
 
 def _make_alpaca_feed(symbol: str, testnet: bool = True, **_) -> BaseFeed:
     from data.feeds.alpaca import AlpacaFeed
-    api_key = os.getenv("ALP_PAPER_KEY", "")
-    api_secret = os.getenv("ALP_PAPER_SECRET", "")
+    api_key = _env.get("ALP_PAPER_KEY", "")
+    api_secret = _env.get("ALP_PAPER_SECRET", "")
     return AlpacaFeed(symbol=symbol, api_key=api_key, api_secret=api_secret, paper=testnet)
 
 

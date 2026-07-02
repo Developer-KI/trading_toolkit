@@ -1,14 +1,12 @@
 """
-strategy/base.py — Abstract Strategy base, PortfolioTarget, and SingleAssetStrategy.
+strategy/base.py — Abstract Strategy base and PortfolioTarget.
 
 The engine calls:
   1. strategy.setup(universe)        — once, to pre-compute indicators
   2. strategy.generate(ctx) per bar  — returns PortfolioTarget
   3. engine rebalances positions to match per-asset sizing, stops, costs
 
-SingleAssetStrategy is a convenience base for strategies that trade one symbol.
-Subclass it, implement `bar(data, idx) -> Allocation`, and optionally override
-`setup_data(data, l2)`.  Everything else is auto-wired.
+SingleAssetStrategy lives in built_in.py (re-exported here for backward compat).
 """
 
 from __future__ import annotations
@@ -21,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 from core.models import Side, OrderBookSnapshot, Position, FundingSnapshot, Allocation
-from .universe import Universe
+from core.universe import Universe
 
 
 # ── Portfolio target ─────────────────────────────────────────────────────────
@@ -182,81 +180,65 @@ class Strategy(abc.ABC):
         """
         Optional batch generation for all bars at once.
 
-        Returns ``(sides, weights)`` where:
-          - ``sides[sym]``   — ``int8`` array of Side values per bar
-          - ``weights[sym]`` — ``float64`` array of allocation weights per bar
-
-        The engine activates the vectorised fast path when this returns non-``None``
-        **and** all stops are :class:`~risk.stops.NopStopLoss` **and** all sizers
-        are :attr:`~risk.sizing.Sizer.vectorizable`.
+        Returns a tuple ``(sides, weights, reasons, metas, confidences)`` where
+        each value is a dict keyed by symbol.  The engine activates the
+        vectorised fast path when this returns non-``None`` **and** all stops are
+        :class:`~risk.stops.NopStopLoss` **and** all sizers are
+        :attr:`~risk.sizing.Sizer.vectorizable`.
 
         Return ``None`` (default) to fall back to the per-bar :meth:`generate` path.
         """
         return None
 
+    def _batch_generate(
+        self, universe: Universe
+    ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], dict[str, list], dict[str, list], dict[str, np.ndarray]]:
+        """
+        Generic batch helper: calls generate() for every bar with a context
+        that has equity=0 and no open positions.  Safe for strategies that only
+        read bar_idx and pre-computed universe data (not portfolio state).
+        Subclasses may call this from generate_all() to opt into vectorisation.
+        """
+        from core.models import Position as _Position
+        symbols = universe.symbols
+        if len(symbols) > 1:
+            index = universe.common_index()
+            if len(index) == 0:
+                index = universe.ohlcv(symbols[0]).index
+        else:
+            index = universe.ohlcv(symbols[0]).index
+        n = len(index)
+
+        sides_all       = {sym: np.zeros(n, dtype=np.int8)   for sym in symbols}
+        weights_all     = {sym: np.zeros(n, dtype=np.float64) for sym in symbols}
+        confidences_all = {sym: np.zeros(n, dtype=np.float64) for sym in symbols}
+        reasons_all     = {sym: [""] * n                      for sym in symbols}
+        metas_all       = {sym: [{}  for _ in range(n)]       for sym in symbols}
+
+        flat_positions = {sym: _Position() for sym in symbols}
+        for i in range(n):
+            ctx = StrategyContext(
+                universe=universe,
+                bar_idx=i,
+                timestamp=index[i],
+                equity=0.0,
+                positions=flat_positions,
+                trade_history=[],
+            )
+            target = self.generate(ctx)
+            for sym in symbols:
+                alloc = target[sym]
+                sides_all[sym][i]       = np.int8(alloc.side.value)
+                weights_all[sym][i]     = alloc.weight
+                confidences_all[sym][i] = alloc.confidence
+                reasons_all[sym][i]     = alloc.reason
+                metas_all[sym][i]       = dict(alloc.meta)
+
+        return sides_all, weights_all, reasons_all, metas_all, confidences_all
+
     def on_fill(self, symbol: str, side: Side, size: float, price: float):
         """Optional callback when a fill occurs (for bookkeeping)."""
         pass
-
-
-# ── SingleAssetStrategy — convenience base replacing Signal ─────────────────
-
-
-class SingleAssetStrategy(Strategy):
-    """
-    Convenience base for single-asset strategies.
-
-    Implement ``bar(data, idx) -> Allocation`` and optionally override
-    ``setup_data(data, l2)`` for indicator pre-computation.
-    ``setup``, ``generate``, and ``generate_all`` are auto-wired.
-
-    """
-
-    def __init__(self, symbol: str, **kw):
-        super().__init__(**kw)
-        self.symbol = symbol
-
-    def setup_data(
-        self, data: pd.DataFrame, l2: list[OrderBookSnapshot] | None = None
-    ):
-        """Optional: pre-compute indicator columns on data in-place."""
-        pass
-
-    @abc.abstractmethod
-    def bar(self, data: pd.DataFrame, idx: int) -> Allocation:
-        """Return the desired allocation for bar ``idx``."""
-        ...
-
-    # ── Auto-wired — generally do not override ──────────────────────────
-
-    def setup(self, universe: Universe):
-        data = universe.ohlcv(self.symbol)
-        l2 = universe.l2(self.symbol)
-        self.setup_data(data, l2)
-
-    def generate(self, ctx: StrategyContext) -> PortfolioTarget:
-        data = ctx.universe.ohlcv(self.symbol)
-        alloc = self.bar(data, ctx.bar_idx)
-        target = PortfolioTarget(timestamp=ctx.timestamp)
-        target[self.symbol] = alloc
-        return target
-
-    def generate_all(
-        self, universe: Universe
-    ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]] | None:
-        data = universe.ohlcv(self.symbol)
-        n = len(data)
-        sides = np.zeros(n, dtype=np.int8)
-        weights = np.zeros(n, dtype=np.float64)
-        for i in range(n):
-            a = self.bar(data, i)
-            sides[i] = np.int8(a.side.value)
-            weights[i] = a.weight
-        return {self.symbol: sides}, {self.symbol: weights}
-
-    @property
-    def params(self) -> dict[str, Any]:
-        return {}
 
 
 # ── Strategy registry ────────────────────────────────────────────────────────
@@ -573,3 +555,10 @@ def get_cross_strategy(name: str) -> type[CrossExchangeStrategy]:
 
 def list_cross_strategies() -> list[str]:
     return list(_CROSS_STRATEGY_REGISTRY.keys())
+
+
+def __getattr__(name: str):
+    if name == "SingleAssetStrategy":
+        from strategy.built_in import SingleAssetStrategy
+        return SingleAssetStrategy
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

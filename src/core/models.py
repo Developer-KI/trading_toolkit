@@ -134,6 +134,7 @@ class Trade:
     pnl_pct: float = 0.0
     fees: float = 0.0
     slippage: float = 0.0
+    confidence: float = 0.0
     reason_entry: str = ""
     reason_exit: str = ""
     bar_values: dict[str, Any] = field(default_factory=dict)
@@ -151,6 +152,7 @@ class Trade:
             "pnl_pct": self.pnl_pct,
             "fees": self.fees,
             "slippage": self.slippage,
+            "confidence": self.confidence,
             "reason_entry": self.reason_entry,
             "reason_exit": self.reason_exit,
             **{f"bar_{k}": v for k, v in self.bar_values.items()},

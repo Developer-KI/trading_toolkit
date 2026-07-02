@@ -24,8 +24,8 @@ is_op          – 1 for the opening post, 0 for a reply
 """
 
 import csv
-import os
 import re
+from pathlib import Path
 import sys
 import warnings
 from datetime import datetime
@@ -171,7 +171,7 @@ def _process_reddit(file_path: str) -> List[Dict]:
 
 def _process_telegram(file_path: str) -> List[Dict]:
     rows: List[Dict] = []
-    fname = os.path.basename(file_path)
+    fname = Path(file_path).name
     channel = re.sub(r"^telegram_", "", fname)
     channel = re.sub(r"_\d{4}_\d{2}_\d{2}_\d{2}_\d{2}\.csv$", "", channel)
 
@@ -209,14 +209,14 @@ _PROCESSORS = {
 def preprocess(input_dir: str, output_dir: str, filename: str) -> str:
     """Merge all today's scraper CSVs in *input_dir* into one cleaned CSV."""
     date = datetime.now().strftime("%Y_%m_%d")
-    os.makedirs(output_dir, exist_ok=True)
-    output = os.path.join(output_dir, filename)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    output = str(Path(output_dir) / filename)
     all_rows: List[Dict] = []
 
-    for fname in sorted(os.listdir(input_dir)):
+    for fname in sorted(p.name for p in Path(input_dir).iterdir()):
         if not fname.endswith(".csv"):
             continue
-        filepath = os.path.join(input_dir, fname)
+        filepath = str(Path(input_dir) / fname)
         print(f"Processing {fname}…", file=sys.stderr)
         matched = False
         for prefix, processor in _PROCESSORS.items():
@@ -344,8 +344,8 @@ def score(
     if score_cols:
         df["sentiment"] = df[score_cols].mean(axis=1).round(6)
 
-    os.makedirs(output_dir, exist_ok=True)
-    out_path = os.path.join(output_dir, filename)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    out_path = str(Path(output_dir) / filename)
     df.to_csv(out_path, index=False)
     print(f"\nSaved {len(df)} scored rows → {out_path}")
 

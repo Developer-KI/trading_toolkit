@@ -19,7 +19,7 @@ import copy
 import csv
 from datetime import datetime
 import logging
-import os
+from pathlib import Path
 import select
 import sys
 import threading
@@ -36,12 +36,12 @@ from core.models import (
     LiveConfig,
     ExchangeCredentials,
 )
-from risk.sizing import Sizer, SizingContext, default_sizer
-from risk.stops import StopLoss, StopContext, default_stop_loss
-from risk.limits import DailyLimitState, check_daily_loss_limit
+from strategy.sizing import Sizer, SizingContext, default_sizer
+from strategy.stops import StopLoss, StopContext, default_stop_loss
+from execution.live_limits import DailyLimitState, check_daily_loss_limit
 
 from strategy.base import Strategy, StrategyContext
-from strategy.universe import Universe
+from core.universe import Universe
 
 from .base_executor_feed import BaseExecutor, FillResult
 from .factory import create_executor, create_feed, create_bar_builder
@@ -137,8 +137,7 @@ class LiveEngine:
         self._last_processed_bar: dict[str, int] = {}
         self._kill_listener = _ManualKillSwitch(self._manual_kill)
 
-        os.makedirs(self.config.log_dir, exist_ok=True)
-        self._run_log_dir: str = self.config.log_dir  # replaced in start()
+        self._run_log_dir: str = ""   # set in start()
         self._trade_log_path: str = ""                 # set in start()
         self._universe = Universe(symbols=self._symbols)
 
@@ -165,9 +164,9 @@ class LiveEngine:
 
     def start(self):
         run_ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        self._run_log_dir = os.path.join(self.config.log_dir, run_ts)
-        os.makedirs(self._run_log_dir, exist_ok=True)
-        self._trade_log_path = os.path.join(self._run_log_dir, self.config.trade_log_csv)
+        self._run_log_dir = Path("logs") / "live" / self.config.exchange / run_ts
+        self._run_log_dir.mkdir(parents=True, exist_ok=True)
+        self._trade_log_path = self._run_log_dir / self.config.trade_log_csv
 
         self._setup_logging()
         logger.info("=" * 60)
@@ -522,7 +521,7 @@ class LiveEngine:
     def _write_trade_csv(self, trade):
         if trade is None:
             return
-        file_exists = os.path.exists(self._trade_log_path)
+        file_exists = self._trade_log_path.exists()
         row = trade.to_dict()
         with open(self._trade_log_path, "a", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=row.keys())
@@ -571,6 +570,6 @@ class LiveEngine:
             format=log_fmt,
             handlers=[
                 logging.StreamHandler(),
-                logging.FileHandler(os.path.join(self._run_log_dir, "single_exchange_engine.log"), mode="a"),
+                logging.FileHandler(self._run_log_dir / "single_exchange_engine.log", mode="a"),
             ],
         )

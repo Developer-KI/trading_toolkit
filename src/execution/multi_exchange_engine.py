@@ -16,9 +16,10 @@ from __future__ import annotations
 import copy
 import csv
 import logging
-import os
+from pathlib import Path
 import threading
 import time
+from datetime import datetime
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -32,9 +33,9 @@ from core.models import (
     LiveConfig,
     ExchangeCredentials,
 )
-from risk.sizing import Sizer, SizingContext, default_sizer
-from risk.stops import StopLoss, StopContext, default_stop_loss
-from risk.limits import DailyLimitState, check_daily_loss_limit
+from strategy.sizing import Sizer, SizingContext, default_sizer
+from strategy.stops import StopLoss, StopContext, default_stop_loss
+from execution.live_limits import DailyLimitState, check_daily_loss_limit
 
 from strategy.base import (
     Strategy,
@@ -44,7 +45,7 @@ from strategy.base import (
     CrossExchangeContext,
     MultiExchangeTarget,
 )
-from strategy.universe import Universe
+from core.universe import Universe
 from strategy.overlay import PortfolioOverlay
 
 from .base_executor_feed import BaseExecutor, BaseFeed, BaseBarBuilder, FillResult, MultiExchangePortfolio
@@ -117,8 +118,8 @@ class MultiExchangeEngine:
         self._last_processed_bar: dict[str, int] = {}
         self._kill_listener = _ManualKillSwitch(self._manual_kill)
 
-        os.makedirs(self.config.log_dir, exist_ok=True)
-        self._trade_log_path = os.path.join(self.config.log_dir, self.config.trade_log_csv)
+        self._run_log_dir: str = ""   # set in start()
+        self._trade_log_path: str = ""                 # set in start()
 
     @property
     def primary_exchange(self) -> str:
@@ -143,6 +144,11 @@ class MultiExchangeEngine:
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
     def start(self):
+        run_ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        exchange_label = "_".join(self._exchange_names)
+        self._run_log_dir = Path("logs") / "live" / exchange_label / run_ts
+        self._run_log_dir.mkdir(parents=True, exist_ok=True)
+        self._trade_log_path = self._run_log_dir / self.config.trade_log_csv
         self._setup_logging()
         mode_label = {
             "cross": f"CrossExchange: {self.cross_strategy.__class__.__name__}",
@@ -607,7 +613,7 @@ class MultiExchangeEngine:
     def _write_trade_csv(self, trade):
         if trade is None:
             return
-        file_exists = os.path.exists(self._trade_log_path)
+        file_exists = self._trade_log_path.exists()
         row = trade.to_dict()
         with open(self._trade_log_path, "a", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=row.keys())
@@ -657,6 +663,6 @@ class MultiExchangeEngine:
             format=log_fmt,
             handlers=[
                 logging.StreamHandler(),
-                logging.FileHandler(os.path.join(self.config.log_dir, "multi_exchange.log"), mode="a"),
+                logging.FileHandler(self._run_log_dir / "multi_exchange.log", mode="a"),
             ],
         )

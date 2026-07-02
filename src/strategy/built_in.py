@@ -2,6 +2,7 @@
 strategy/built_in.py — Built-in strategy implementations.
 
 Single-asset:
+  SingleAssetStrategy — convenience base for single-symbol strategies
   CompositeStrategy   — combine multiple SingleAssetStrategy instances with
                         weighted voting (registered as "composite")
 
@@ -13,26 +14,91 @@ Multi-asset:
 
 from __future__ import annotations
 
+import abc
+
 import numpy as np
 import pandas as pd
 
-from core.models import Side, Allocation
+from core.models import Side, Allocation, OrderBookSnapshot
 from strategy.indicators import rsi
 
 from .base import (
-    SingleAssetStrategy,
     Strategy,
     StrategyContext,
     PortfolioTarget,
     register_strategy,
 )
-from .universe import Universe
+from core.universe import Universe
+
+
+# ── SingleAssetStrategy — convenience base for single-symbol strategies ──────
+class SingleAssetStrategy(Strategy):
+    """
+    Convenience base for single-asset strategies.
+
+    Implement ``bar(data, idx) -> Allocation`` and optionally override
+    ``setup_data(data, l2)`` for indicator pre-computation.
+    ``setup``, ``generate``, and ``generate_all`` are auto-wired.
+    """
+
+    def __init__(self, symbol: str, **kw):
+        super().__init__(**kw)
+        self.symbol = symbol
+
+    def setup_data(
+        self, _data: pd.DataFrame, _l2: list[OrderBookSnapshot] | None = None
+    ):
+        """Optional: pre-compute indicator columns on data in-place."""
+        pass
+
+    @abc.abstractmethod
+    def bar(self, data: pd.DataFrame, idx: int) -> Allocation:
+        """Return the desired allocation for bar ``idx``."""
+        ...
+
+    # ── Auto-wired — generally do not override ──────────────────────────
+
+    def setup(self, universe: Universe):
+        data = universe.ohlcv(self.symbol)
+        l2 = universe.l2(self.symbol)
+        self.setup_data(data, l2)
+
+    def generate(self, ctx: StrategyContext) -> PortfolioTarget:
+        data = ctx.universe.ohlcv(self.symbol)
+        alloc = self.bar(data, ctx.bar_idx)
+        target = PortfolioTarget(timestamp=ctx.timestamp)
+        target[self.symbol] = alloc
+        return target
+
+    def generate_all(self, universe: Universe):
+        data = universe.ohlcv(self.symbol)
+        n = len(data)
+        sides = np.zeros(n, dtype=np.int8)
+        weights = np.zeros(n, dtype=np.float64)
+        confidences = np.zeros(n, dtype=np.float64)
+        reasons: list[str] = []
+        metas: list[dict] = []
+        for i in range(n):
+            a = self.bar(data, i)
+            sides[i] = np.int8(a.side.value)
+            weights[i] = a.weight
+            confidences[i] = a.confidence
+            reasons.append(a.reason)
+            metas.append(dict(a.meta))
+        return (
+            {self.symbol: sides},
+            {self.symbol: weights},
+            {self.symbol: reasons},
+            {self.symbol: metas},
+            {self.symbol: confidences},
+        )
+
+    @property
+    def params(self) -> dict:
+        return {}
 
 
 # ── Composite single-asset strategy ─────────────────────────────────────────
-
-
-@register_strategy("composite")
 class CompositeStrategy(SingleAssetStrategy):
     """
     Combine multiple single-asset strategies with weighted voting.
@@ -101,8 +167,6 @@ class CompositeStrategy(SingleAssetStrategy):
 
 
 # ── Multi-asset per-symbol strategy ─────────────────────────────────────────
-
-
 class PerAssetStrategy(Strategy):
     """
     Run a different SingleAssetStrategy on each asset independently.
@@ -141,6 +205,24 @@ class PerAssetStrategy(Strategy):
                 meta=alloc.meta,
             )
         return target
+
+    def generate_all(self, universe):
+        n_assets = len(self.strategies)
+        sides_all = {}
+        weights_all = {}
+        reasons_all = {}
+        metas_all = {}
+        confidences_all = {}
+        for sym, s in self.strategies.items():
+            batch = s.generate_all(universe)
+            if batch is None:
+                return None
+            sides_all[sym]       = batch[0][sym]
+            weights_all[sym]     = batch[1][sym] / max(n_assets, 1)
+            reasons_all[sym]     = [f"[{sym}] {r}" for r in batch[2][sym]]
+            metas_all[sym]       = batch[3][sym]
+            confidences_all[sym] = batch[4][sym] if len(batch) > 4 else np.zeros(len(batch[0][sym]))
+        return sides_all, weights_all, reasons_all, metas_all, confidences_all
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -248,6 +330,9 @@ class ZPairsSpreadStrategy(Strategy):
 
         return target
 
+    def generate_all(self, universe):
+        return self._batch_generate(universe)
+
 
 @register_strategy("cross_asset_momentum")
 class CrossAssetMomentumStrategy(Strategy):
@@ -335,6 +420,9 @@ class CrossAssetMomentumStrategy(Strategy):
 
         return target
 
+    def generate_all(self, universe):
+        return self._batch_generate(universe)
+
 
 @register_strategy("mean_reversion_basket")
 class MeanReversionBasketStrategy(Strategy):
@@ -421,3 +509,6 @@ class MeanReversionBasketStrategy(Strategy):
 
         target.normalize(self.max_total_weight)
         return target
+
+    def generate_all(self, universe):
+        return self._batch_generate(universe)

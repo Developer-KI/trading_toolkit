@@ -1,6 +1,5 @@
 import asyncio
 import aiohttp
-import os
 import time
 import pandas as pd
 import argparse
@@ -15,18 +14,18 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = PROJECT_ROOT / "data" / "cleaned" / "macro_snapshots"
 
-os.makedirs(DATA_DIR, exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # %%
 
 
 def append_to_csv(data_dict: dict, filename: str):
     """Appends a dictionary row to a CSV to maintain a time-series record."""
-    file_path = os.path.join(DATA_DIR, filename)
+    file_path = DATA_DIR / filename
     df = pd.DataFrame([data_dict])
 
     # If file doesn't exist, write headers; otherwise append
-    if not os.path.isfile(file_path):
+    if not file_path.is_file():
         df.to_csv(file_path, index=False)
     else:
         df.to_csv(file_path, mode="a", header=False, index=False)

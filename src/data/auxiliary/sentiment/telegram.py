@@ -1,20 +1,20 @@
-import os
 import csv
 import asyncio
 from datetime import datetime
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
 from telethon.tl.types import MessageEntityTextUrl, MessageMediaPhoto, MessageMediaDocument
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values
 
 load_dotenv()
+_env = dotenv_values()
 
 # -------------------------------------------------------------------
 # CONFIGURATION – replace with your own values or set environment variables
 # -------------------------------------------------------------------
-API_ID = int(os.getenv('TG_API_ID'))
-API_HASH = os.getenv('TG_API_HASH')
-PHONE_NUMBER = os.getenv('TG_PHONE')
+API_ID = int(_env.get('TG_API_ID'))
+API_HASH = _env.get('TG_API_HASH')
+PHONE_NUMBER = _env.get('TG_PHONE')
 
 # Target channel/group – can be username (e.g., 'durov'), invite link, or phone number for a user
 TARGET = 'hyperliquid_announcements'

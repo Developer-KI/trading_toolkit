@@ -86,6 +86,7 @@ class AlpacaFeed(BaseFeed):
         """Run the alpaca-py async stream in a dedicated event loop."""
         try:
             from alpaca.data.live import StockDataStream
+            from alpaca.data.enums import DataFeed
         except ImportError as exc:
             raise ImportError(
                 "Missing dependency: alpaca-py. Install with: pip install alpaca-py"
@@ -97,7 +98,7 @@ class AlpacaFeed(BaseFeed):
         self._stream = StockDataStream(
             api_key=self._api_key,
             secret_key=self._api_secret,
-            feed="iex",  # free real-time; use "sip" for full tape (paid plan)
+            feed=DataFeed.IEX,  # free real-time; use DataFeed.SIP for full tape (paid plan)
         )
 
         self._stream.subscribe_trades(self._handle_trade, self.symbol)

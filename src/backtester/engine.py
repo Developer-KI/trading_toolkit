@@ -19,8 +19,8 @@ from __future__ import annotations
 
 import copy
 import json
-import os
 import time
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -36,8 +36,8 @@ from core.models import (
 )
 from core.parser import timeframe_to_seconds
 from backtester.costs import CostModel, CompositeCostModel, NullCostModel
-from risk.sizing import Sizer, SizingContext, default_sizer
-from risk.stops import (
+from strategy.sizing import Sizer, SizingContext, default_sizer
+from strategy.stops import (
     StopLoss,
     StopContext,
     EmbeddedStop,
@@ -45,7 +45,7 @@ from risk.stops import (
 )
 
 from strategy.base import Strategy, StrategyContext
-from strategy.universe import Universe
+from core.universe import Universe
 
 
 def _cost_model_label(m: CostModel) -> "str | list[str]":
@@ -228,12 +228,13 @@ class BacktestResult:
         return path
 
     def save(self, run_name: str, base_dir: str = "logs/test") -> str:
-        """Save log.json, trades.csv, and equity_curve.png to logs/test/<run_name>/."""
+        """Save log.json, trades.csv, and equity_curve.png to logs/test/<run_name>/<timestamp>/."""
         import dataclasses
         from datetime import datetime, timezone
 
-        run_dir = os.path.join(base_dir, run_name)
-        os.makedirs(run_dir, exist_ok=True)
+        ts_str = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        run_dir = Path(base_dir) / run_name / ts_str
+        run_dir.mkdir(parents=True, exist_ok=True)
 
         summary = self.summary()
         config_dict = dataclasses.asdict(self.config)
@@ -261,13 +262,13 @@ class BacktestResult:
             "config": config_dict,
             "meta": meta_out,
         }
-        with open(os.path.join(run_dir, "log.json"), "w") as f:
+        with open(run_dir / "log.json", "w") as f:
             json.dump(log_data, f, indent=2, default=str)
 
-        self.to_csv(os.path.join(run_dir, "trades.csv"))
-        self.plot_equity(save_path=os.path.join(run_dir, "equity_curve.png"))
+        self.to_csv(run_dir / "trades.csv")
+        self.plot_equity(save_path=run_dir / "equity_curve.png")
 
-        return run_dir
+        return str(run_dir)
 
 
 # ── Per-asset state ──────────────────────────────────────────────────────────
@@ -375,7 +376,7 @@ class Backtester:
         sizers: dict[str, Sizer],
     ) -> bool:
         """True when stops are all NopStopLoss and every sizer is vectorizable."""
-        from risk.stops import NopStopLoss
+        from strategy.stops import NopStopLoss
         return (
             all(isinstance(states[s].stop_loss, NopStopLoss) for s in symbols)
             and all(sizers[s].vectorizable for s in symbols)
@@ -394,6 +395,9 @@ class Backtester:
         n_bars: int,
         sizers: dict[str, Sizer],
         cost_models: dict[str, CostModel],
+        reasons_all: dict[str, list[str]] | None = None,
+        metas_all: dict[str, list[dict]] | None = None,
+        confidences_all: dict[str, np.ndarray] | None = None,
     ) -> BacktestResult:
         """
         Fully vectorised backtest — replaces the O(N) Python bar loop with
@@ -538,21 +542,42 @@ class Backtester:
             equity_changes += cum_realized + unrealized
 
             # ── Build Trade objects (O(M)) ────────────────────────────────
+            sym_reasons     = reasons_all.get(sym)     if reasons_all     else None
+            sym_metas       = metas_all.get(sym)       if metas_all       else None
+            sym_confidences = confidences_all.get(sym) if confidences_all else None
             for k in range(len(entry_bars)):
                 is_forced = was_force_closed and k == len(entry_bars) - 1
                 notional  = float(entry_prices[k]) * float(sizes[k])
                 trade_meta = {"symbol": sym} if not is_single_asset else {}
+
+                entry_i = int(entry_bars[k])
+                close_i = int(close_bars[k])
+
+                reason_entry = sym_reasons[entry_i]       if sym_reasons     else ""
+                bar_vals     = sym_metas[entry_i]         if sym_metas       else {}
+                confidence   = float(sym_confidences[entry_i]) if sym_confidences is not None else 0.0
+
+                if is_forced:
+                    reason_exit = "End of data"
+                elif sym_reasons:
+                    reason_exit = sym_reasons[close_i] or "strategy"
+                else:
+                    reason_exit = "strategy"
+
                 all_trades.append(Trade(
-                    timestamp=index[int(entry_bars[k])],
+                    timestamp=index[entry_i],
                     side=Side(int(directions[k])),
                     size=float(sizes[k]),
                     entry_price=float(entry_prices[k]),
                     exit_price=float(exit_prices[k]),
-                    exit_timestamp=index[int(close_bars[k])],
+                    exit_timestamp=index[close_i],
                     pnl=float(net_pnl[k]),
                     pnl_pct=float(net_pnl[k] / notional) if notional > 0 else 0.0,
                     fees=float(entry_fees[k] + exit_fees[k]),
-                    reason_exit="End of data" if is_forced else "strategy",
+                    confidence=confidence,
+                    reason_entry=reason_entry,
+                    reason_exit=reason_exit,
+                    bar_values=bar_vals,
                     meta=trade_meta,
                 ))
 
@@ -627,11 +652,16 @@ class Backtester:
         if self._can_vectorize(symbols, states, sizers):
             batch = strategy.generate_all(universe)
             if batch is not None:
-                sides_all, weights_all = batch
+                sides_all, weights_all = batch[0], batch[1]
+                reasons_all     = batch[2] if len(batch) > 2 else None
+                metas_all       = batch[3] if len(batch) > 3 else None
+                confidences_all = batch[4] if len(batch) > 4 else None
                 return self._run_vectorized(
                     t0, sides_all, weights_all, universe, symbols,
                     is_single_asset, timeframe,
                     index, n_bars, sizers, cost_models,
+                    reasons_all=reasons_all, metas_all=metas_all,
+                    confidences_all=confidences_all,
                 )
 
         # ── Pre-extract OHLCV as numpy arrays (O(n) bulk alignment) ──────
@@ -852,9 +882,10 @@ class Backtester:
                     pnl=pnl,
                     pnl_pct=pnl_pct,
                     fees=entry_fee + cost,
+                    confidence=(st.open_trade.confidence if st.open_trade else 0.0),
                     reason_entry=(st.open_trade.reason_entry if st.open_trade else ""),
                     reason_exit=desired.reason or "target_flat",
-                    bar_values=desired.meta,
+                    bar_values=(st.open_trade.bar_values if st.open_trade else {}),
                     meta=trade_meta,
                 )
                 all_trades.append(trade)
@@ -943,6 +974,7 @@ class Backtester:
                     size=size,
                     entry_price=price,
                     fees=cost,
+                    confidence=alloc.confidence,
                     reason_entry=alloc.reason,
                     bar_values=alloc.meta,
                     meta=trade_meta,

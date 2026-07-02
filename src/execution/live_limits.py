@@ -1,8 +1,5 @@
 """
-risk/limits.py — Hard risk limits enforced at runtime.
-
-Extracted from execution/single_exchange_engine.py so risk rules live in one place
-and can be tested independently of the execution engine.
+execution/live_limits.py — Hard risk limits enforced at runtime.
 
 Dependency: core/ only.
 """
@@ -10,7 +7,7 @@ Dependency: core/ only.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from core.models import LiveConfig
 

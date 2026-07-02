@@ -1,5 +1,5 @@
 """
-strategy/universe.py — Universe and auxiliary data management.
+core/universe.py — Universe and auxiliary data management.
 
 A Universe holds OHLCV DataFrames for every asset in the strategy's scope,
 plus any number of auxiliary DataSources (funding rates, sentiment, on-chain

@@ -1,6 +1,6 @@
-import os
 import re
 import shutil
+from pathlib import Path
 import time
 from datetime import datetime
 
@@ -28,8 +28,8 @@ class ChanBoardScraper:
             board_path = f"/{board_name}"
 
         self.board_url = urljoin(self.base_url, board_path)
-        self.output_dir = os.path.join(directory, board_name)
-        self.csv_file_path = os.path.join(self.output_dir, file_name)
+        self.output_dir = Path(directory) / board_name
+        self.csv_file_path = self.output_dir / file_name
 
         self.session = requests.Session()
         self.session.headers.update(
@@ -73,7 +73,7 @@ class ChanBoardScraper:
 
         df = pd.DataFrame(rows_list, columns=["No", "Link"])
 
-        os.makedirs(os.path.dirname(self.csv_file_path), exist_ok=True)
+        self.csv_file_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(self.csv_file_path, index=False)
 
         print(f"Saved {len(df)} thread links -> {self.csv_file_path}")
@@ -160,9 +160,10 @@ class PostScraper:
             cleanup:     If True, delete the links directory after scraping.
         """
         self.csv_path = csv_path
-        self.links_dir = os.path.dirname(csv_path) or "datasets"
-        self.output_dir = output_dir or self.links_dir
-        self.output_path = os.path.join(self.output_dir, output_file)
+        _parent = Path(csv_path).parent
+        self.links_dir = Path("datasets") if str(_parent) == "." else _parent
+        self.output_dir = Path(output_dir) if output_dir else self.links_dir
+        self.output_path = self.output_dir / output_file
         self.delay = delay
         self.save_every = save_every
         self.cleanup = cleanup
@@ -178,12 +179,12 @@ class PostScraper:
             }
         )
 
-        os.makedirs(self.output_dir, exist_ok=True)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.dataset: list[dict] = self._load_dataset()
 
     def _load_dataset(self) -> list[dict]:
         """Load existing dataset from disk, or return an empty list."""
-        if os.path.isfile(self.output_path):
+        if self.output_path.is_file():
             try:
                 df = pd.read_csv(self.output_path)
                 print(f"Loaded existing dataset from {self.output_path}")
@@ -292,7 +293,7 @@ class PostScraper:
 
     def _cleanup_links_dir(self):
         """Delete the directory that held the thread-links CSV."""
-        if os.path.isdir(self.links_dir):
+        if self.links_dir.is_dir():
             shutil.rmtree(self.links_dir)
             print(f"Cleaned up links directory: {self.links_dir}")
 

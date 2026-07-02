@@ -1,22 +1,17 @@
 from __future__ import annotations
 
-import os
-import sys
-
 import pandas as pd
-from dotenv import load_dotenv
-
-# Allow running from the repo root without installing the package.
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+from dotenv import load_dotenv, dotenv_values
 
 from core.models import BacktestConfig, Side, Allocation
+from core.universe import Universe
 from backtester.engine import Backtester
+from backtester.costs import NullCostModel
 from strategy.base import SingleAssetStrategy, register_strategy
 from strategy.indicators import ema, rsi, atr
-from strategy.universe import Universe
-from risk.sizing import FixedNotionalSizer
-from risk.stops import NopStopLoss
-from backtester.costs import NullCostModel
+from strategy.sizing import FixedNotionalSizer
+from strategy.stops import NopStopLoss
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -24,9 +19,10 @@ from backtester.costs import NullCostModel
 # ═══════════════════════════════════════════════════════════════════════════
 def load_credentials() -> dict:
     load_dotenv()
+    _env = dotenv_values()
     return {
-        "key": os.getenv("ALP_PAPER_KEY", ""),
-        "secret": os.getenv("ALP_PAPER_SECRET", ""),
+        "key": _env.get("ALP_PAPER_KEY", ""),
+        "secret": _env.get("ALP_PAPER_SECRET", ""),
     }
 
 
@@ -63,8 +59,9 @@ def fetch_alpaca_bars(
             "Missing dependency: alpaca-py. Install with: pip install alpaca-py"
         ) from exc
 
-    key = api_key or os.environ.get("ALPACA_KEY", "")
-    secret = api_secret or os.environ.get("ALPACA_SECRET", "")
+    _env = dotenv_values()
+    key = api_key or _env.get("ALPACA_KEY", "")
+    secret = api_secret or _env.get("ALPACA_SECRET", "")
     if not key or not secret:
         raise ValueError(
             "Alpaca credentials required. Set ALPACA_KEY and ALPACA_SECRET "

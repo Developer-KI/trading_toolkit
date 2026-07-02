@@ -81,7 +81,7 @@ def sizer_form(container, key_prefix: str = "sizer"):
     Sizer selector + param fields.
     Returns an instantiated Sizer.
     """
-    from risk.sizing import (
+    from strategy.sizing import (
         FixedFractionalSizer, FixedNotionalSizer,
         VolatilityTargetSizer, KellySizer, CompositeSizer,
     )
@@ -129,7 +129,7 @@ def stop_form(container, key_prefix: str = "stop"):
     Stop-loss selector + param fields.
     Returns an instantiated StopLoss.
     """
-    from risk.stops import FixedPercentStop, ATRStop, TrailingStop, RiskRewardStop
+    from strategy.stops import FixedPercentStop, ATRStop, TrailingStop, RiskRewardStop
 
     OPTIONS = ["Fixed Percent", "ATR", "Trailing", "Risk/Reward"]
     choice = container.radio("Stop loss", OPTIONS, key=f"{key_prefix}_choice")

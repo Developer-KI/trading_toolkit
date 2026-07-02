@@ -5,11 +5,11 @@ import urllib.request
 import pandas as pd
 import time
 import argparse
-import os
+from pathlib import Path
 
 URL = "wss://api.hyperliquid.xyz/ws"
 REST_URL = "https://api.hyperliquid.xyz/info"
-CHECKPOINT_FILE = "scraper_checkpoint.json"
+CHECKPOINT_FILE = Path("scraper_checkpoint.json")
 
 
 def fetch_market_data():
@@ -127,7 +127,7 @@ async def collect_spreads(assets, target_ticks=15, batch_size=8, max_timeout=45)
     }
 
     completed_coins = set()
-    if os.path.exists(CHECKPOINT_FILE):
+    if CHECKPOINT_FILE.exists():
         try:
             with open(CHECKPOINT_FILE, "r") as f:
                 saved_data = json.load(f)
@@ -325,8 +325,8 @@ async def main():
     print(f"\n💾 Saved full dataset to {filename}")
 
     # Clean up the checkpoint since we finished successfully!
-    if os.path.exists(CHECKPOINT_FILE):
-        os.remove(CHECKPOINT_FILE)
+    if CHECKPOINT_FILE.exists():
+        CHECKPOINT_FILE.unlink()
         print("🧹 Cleaned up checkpoint file.")
 
 

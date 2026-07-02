@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from core.models import Position, Trade
-from risk.stops import StopLoss
+from strategy.stops import StopLoss
 from .base_executor_feed import BaseFeed, BaseBarBuilder
 
 

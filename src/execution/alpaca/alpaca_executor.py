@@ -103,10 +103,15 @@ class AlpacaExecutor(BaseExecutor):
         from alpaca.trading.requests import MarketOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
         alpaca_side = OrderSide.BUY if side == Side.LONG else OrderSide.SELL
+        # Alpaca only supports fractional shares for BUY market orders;
+        # SELL (close or short) orders must use whole share quantities.
+        qty = size if alpaca_side == OrderSide.BUY else int(size)
+        if qty <= 0:
+            return FillResult(success=False, status="size rounded to zero", exchange=self.exchange_name)
         try:
             req = MarketOrderRequest(
                 symbol=symbol,
-                qty=size,
+                qty=qty,
                 side=alpaca_side,
                 time_in_force=TimeInForce.DAY,
             )
@@ -134,10 +139,13 @@ class AlpacaExecutor(BaseExecutor):
         from alpaca.trading.requests import LimitOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
         alpaca_side = OrderSide.BUY if side == Side.LONG else OrderSide.SELL
+        qty = size if alpaca_side == OrderSide.BUY else int(size)
+        if qty <= 0:
+            return FillResult(success=False, status="size rounded to zero", exchange=self.exchange_name)
         try:
             req = LimitOrderRequest(
                 symbol=symbol,
-                qty=size,
+                qty=qty,
                 side=alpaca_side,
                 time_in_force=TimeInForce.DAY,
                 limit_price=price,
@@ -188,23 +196,46 @@ class AlpacaExecutor(BaseExecutor):
         try:
             from alpaca.data.requests import StockBarsRequest
             from alpaca.data.timeframe import TimeFrame
-            req = StockBarsRequest(
-                symbol_or_symbols=symbol,
-                timeframe=TimeFrame.Minute,
-                start=pd.Timestamp(start_ms, unit="ms", tz="UTC"),
-                end=pd.Timestamp(end_ms, unit="ms", tz="UTC"),
-            )
-            bars = self._data.get_stock_bars(req)
+            from alpaca.data.enums import DataFeed
+            # End 5 min before now so recently unindexed bars don't cause a miss
+            end_ts = pd.Timestamp(end_ms, unit="ms", tz="UTC") - pd.Timedelta(minutes=5)
+            requested_start = pd.Timestamp(start_ms, unit="ms", tz="UTC")
+
+            # US equities trade ~390 min/day. The requested window may fall entirely
+            # outside market hours (pre-open, overnight, weekend). Retry with a wider
+            # window (5x, then 14x) to ensure we cross into the previous session.
+            df = pd.DataFrame()
+            for factor in (1, 5, 14):
+                start_ts = end_ts - (end_ts - requested_start) * factor
+                req = StockBarsRequest(
+                    symbol_or_symbols=symbol,
+                    timeframe=TimeFrame.Minute,
+                    start=start_ts,
+                    end=end_ts,
+                    feed=DataFeed.IEX,
+                )
+                bars = self._data.get_stock_bars(req)
+                df = bars.df
+                if not df.empty:
+                    break
+
+            if df.empty:
+                return []
+            if isinstance(df.index, pd.MultiIndex):
+                if symbol not in df.index.get_level_values("symbol"):
+                    return []
+                df = df.xs(symbol, level="symbol")
+            df = df.sort_index()
             return [
                 {
-                    "timestamp": pd.Timestamp(b.timestamp),
-                    "open": float(b.open),
-                    "high": float(b.high),
-                    "low": float(b.low),
-                    "close": float(b.close),
-                    "volume": float(b.volume),
+                    "timestamp": pd.Timestamp(row.Index),
+                    "open": float(row.open),
+                    "high": float(row.high),
+                    "low": float(row.low),
+                    "close": float(row.close),
+                    "volume": float(row.volume),
                 }
-                for b in bars[symbol]
+                for row in df.itertuples()
             ]
         except Exception as exc:
             logger.error("fetch_historical_candles(%s) failed: %s", symbol, exc)

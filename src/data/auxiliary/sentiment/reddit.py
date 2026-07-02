@@ -1,6 +1,6 @@
-import os
 import re
 import csv
+from pathlib import Path
 import json
 import time
 import requests
@@ -19,13 +19,13 @@ class RedditScraper:
     # MARKER (incremental scraping)
     # ──────────────────────────────────────────
 
-    def _marker_path(self, subreddit: str) -> str:
-        os.makedirs("./datasets", exist_ok=True)
-        return f"./datasets/.last_seen_{subreddit}.json"
+    def _marker_path(self, subreddit: str) -> Path:
+        Path("./datasets").mkdir(parents=True, exist_ok=True)
+        return Path("./datasets") / f".last_seen_{subreddit}.json"
 
     def _load_last_seen_id(self, subreddit: str) -> Optional[str]:
         path = self._marker_path(subreddit)
-        if not os.path.exists(path):
+        if not path.exists():
             return None
         try:
             with open(path, "r") as f:
@@ -342,9 +342,9 @@ class RedditScraper:
             filename = f"reddit_{filename}.csv"
         else:
             filename = f"reddit_{filename}"
-        out_dir = "./datasets"
-        os.makedirs(out_dir, exist_ok=True)
-        out_path = os.path.join(out_dir, filename)
+        out_dir = Path("./datasets")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / filename
 
         # Fetch comments and periodically flush to CSV
         print(f"\nFetching comments for {len(new_posts)} new posts…")
@@ -417,9 +417,9 @@ class RedditScraper:
         else:
             filename = f"reddit_{filename}"
 
-        out_dir = "./datasets"
-        os.makedirs(out_dir, exist_ok=True)
-        out_path = os.path.join(out_dir, filename)
+        out_dir = Path("./datasets")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / filename
 
         rows = [self._post_to_row(post, subreddit) for post in data]
         self._save_csv(rows, out_path)

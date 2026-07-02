@@ -3,10 +3,11 @@ stress.py — Modular stress testing framework.
 
 Five types of stress tests:
   1. ParamSweep       — sweep SingleAssetStrategy parameters (grid or random)
-  2. CostStressTest   — sweep cost assumptions (fees, slippage, impact)
-  3. RegimeStressTest — test across market regime subsets (vol, trend, etc.)
-  4. MonteCarloStress — bootstrap / shuffle trades to build confidence intervals
-  5. StrategyStressTest — sweep Strategy parameters (multi-asset)
+  2. StrategyStressTest — sweep Strategy parameters (multi-asset)
+  3. CostStressTest   — sweep cost assumptions (fees, slippage, impact)
+  4. RegimeStressTest — test across market regime subsets (vol, trend, etc.)
+  5. MonteCarloStress — bootstrap / shuffle trades to build confidence intervals
+  
 
 All tests return a StressResult with a summary DataFrame and optional plots.
 """
@@ -25,8 +26,9 @@ from core.models import BacktestConfig
 from .costs import CostModel, CompositeCostModel
 from .engine import Backtester, BacktestResult
 
-from strategy.base import SingleAssetStrategy, Strategy
-from strategy.universe import Universe
+from strategy.base import Strategy
+from strategy.built_in import SingleAssetStrategy
+from core.universe import Universe
 
 
 # ── Result container ─────────────────────────────────────────────────────────

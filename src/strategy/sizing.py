@@ -1,14 +1,10 @@
 """
-risk/sizing.py — Modular position sizing framework.
-
-Moved here from strategy/sizing.py so the risk layer is independent of the
-strategy layer. strategy/sizing.py now re-exports from here for backward
-compatibility.
+strategy/sizing.py — Modular position sizing framework.
 
 Every Sizer takes a SizingContext and returns position size in base-asset units.
 Sizers can be composed and stress-tested independently of any strategy.
 
-Dependency: core/ only — no imports from strategy/ or execution/.
+Dependency: core/ only — no imports from execution/.
 """
 
 from __future__ import annotations
