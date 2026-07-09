@@ -19,93 +19,70 @@ from hypothesis import (
 )
 from strategy.built_in import CompositeStrategy, SingleAssetStrategy
 from strategy.indicators import bollinger, ema, rsi
-from strategy.sizing import FixedNotionalSizer, VolatilityTargetSizer
+from strategy.sizing import FixedNotionalSizer
 from strategy.stops import NopStopLoss
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Data fetching
 # ═══════════════════════════════════════════════════════════════════════════
-def load_credentials() -> dict:
-    load_dotenv()
-    _env = dotenv_values()
-    return {
-        "key": _env.get("ALP_PAPER_KEY", ""),
-        "secret": _env.get("ALP_PAPER_SECRET", ""),
-    }
 
-
-def fetch_alpaca_bars(
+def fetch_lse_bars(
     symbol: str,
     start: str,
     end: str,
     timeframe: str = "1d",
     api_key: str | None = None,
-    api_secret: str | None = None,
 ) -> pd.DataFrame:
     """
-    Fetch OHLCV bars from Alpaca for a single symbol.
+    Fetch OHLCV bars from London Strategic Edge for a single symbol.
 
     Parameters
     ----------
-    symbol    : ticker, e.g. "AAPL", "SPY"
-    start     : ISO date string, e.g. "2023-01-01"
-    end       : ISO date string, e.g. "2024-01-01"
-    timeframe : one of "1d", "1h", "30m", "15m", "5m", "1m"
-    api_key   : Alpaca key; falls back to ALPACA_KEY env var
-    api_secret: Alpaca secret; falls back to ALPACA_SECRET env var
+    symbol    : ticker exactly as in the LSE catalog, e.g. "AAPL", "BTC/USD"
+    start     : ISO date string, e.g. "2005-01-01"
+    end       : ISO date string, e.g. "2026-01-01"
+    timeframe : 1s 5s 15s 30s 1m 3m 5m 15m 30m 1h 4h 1d 1w 1mo (default 1d)
+    api_key   : LSE key; falls back to LSE_DATA env var
 
     Returns
     -------
     DataFrame with DatetimeIndex and columns [open, high, low, close, volume]
     """
     try:
-        from alpaca.data.historical import StockHistoricalDataClient
-        from alpaca.data.requests import StockBarsRequest
-        from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+        from lse import LSE
     except ImportError as exc:
         raise ImportError(
-            "Missing dependency: alpaca-py. Install with: pip install alpaca-py"
+            "Missing dependency: lse-data. "
+            "Install with: pip install 'lse-data[frames]'"
         ) from exc
 
+    load_dotenv()
     _env = dotenv_values()
-    key = api_key or _env.get("ALPACA_KEY", "")
-    secret = api_secret or _env.get("ALPACA_SECRET", "")
-    if not key or not secret:
+    key = api_key or _env.get("LSE_DATA", "")
+    if not key:
         raise ValueError(
-            "Alpaca credentials required. Set ALPACA_KEY and ALPACA_SECRET "
-            "environment variables, or pass api_key/api_secret directly."
+            "LSE API key required. Set LSE_DATA in your .env file "
+            "or pass api_key directly."
         )
 
-    client = StockHistoricalDataClient(api_key=key, secret_key=secret)
+    client = LSE(api_key=key)
+    rows = client.candles(symbol, timeframe, start=start, end=end)
 
-    tf_map = {
-        "1d":  TimeFrame.Day,
-        "1h":  TimeFrame.Hour,
-        "30m": TimeFrame(30, TimeFrameUnit.Minute),
-        "15m": TimeFrame(15, TimeFrameUnit.Minute),
-        "5m":  TimeFrame(5, TimeFrameUnit.Minute),
-        "1m":  TimeFrame.Minute,
-    }
-    if timeframe not in tf_map:
-        raise ValueError(f"Unsupported timeframe '{timeframe}'. Choose from {list(tf_map)}")
+    df = pd.DataFrame(rows)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df = df.set_index("timestamp").sort_index()
 
-    req = StockBarsRequest(
-        symbol_or_symbols=symbol,
-        timeframe=tf_map[timeframe],
-        start=pd.Timestamp(start, tz="US/Eastern"),
-        end=pd.Timestamp(end, tz="US/Eastern"),
-        adjustment="all", 
-    )
-    bars = client.get_stock_bars(req)
-    df = bars.df
+    # Forex candles carry no volume — fill with zero so downstream code is uniform
+    if "volume" not in df.columns:
+        df["volume"] = 0
 
-    if isinstance(df.index, pd.MultiIndex):
-        df = df.xs(symbol, level="symbol")
+    return df[["open", "high", "low", "close", "volume"]]
 
-    df.index = pd.to_datetime(df.index, utc=True)
-    df = df[["open", "high", "low", "close", "volume"]].sort_index()
-    return df
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Strategies  (identical to alpaca_backtest_demo)
+# ═══════════════════════════════════════════════════════════════════════════
 
 class EmaRsiStrategy(SingleAssetStrategy):
     """
@@ -113,10 +90,6 @@ class EmaRsiStrategy(SingleAssetStrategy):
 
     Entry:  close > slow EMA AND RSI < rsi_overbought AND vol regime = medium
     Exit:   close <= slow EMA OR RSI >= rsi_overbought OR vol regime != medium
-
-    Vol regime uses the same expanding-quantile approach as RegimeStressTest:
-    20-bar rolling realised vol is classified as low (<=q_low), high (>=q_high),
-    or medium (between). Only the medium band allows open positions.
     """
 
     def __init__(
@@ -151,8 +124,6 @@ class EmaRsiStrategy(SingleAssetStrategy):
     def setup_data(self, data: pd.DataFrame, l2=None):
         data["ema_slow"] = ema(data["close"], self.slow)
         data["rsi"] = rsi(data["close"], self.rsi_period)
-        # Expanding quantiles: at bar t only bars 0..t are used — no look-ahead.
-        # Mirrors RegimeStressTest._default_vol_regime exactly.
         rv = data["close"].pct_change().rolling(self.vol_window).std()
         data["_rv"]     = rv
         data["_rv_q_lo"] = rv.expanding(min_periods=self.vol_window).quantile(self.vol_q_low)
@@ -243,7 +214,6 @@ class BollingerMeanReversionStrategy(SingleAssetStrategy):
                 confidence=1.0,
                 reason=f"BB oversold | close={close:.2f} < lower={lower:.2f}",
             )
-
         if close > upper:
             return Allocation(
                 side=Side.SHORT,
@@ -259,10 +229,8 @@ class VolFilteredCompositeStrategy(CompositeStrategy):
     """
     CompositeStrategy that sits out when volatility is elevated.
 
-    Computes a rolling vol (std of returns over `vol_window` bars) and
-    compares it to a longer rolling median of that vol.  If the current
-    vol exceeds `vol_multiplier` × median, the bar is skipped.
-    This avoids look-ahead bias because the median is purely backward-looking.
+    Rolling vol is compared to a longer rolling median; if current vol exceeds
+    vol_multiplier × median the bar is skipped.
     """
 
     def __init__(
@@ -339,17 +307,17 @@ def _print_metrics_table(summaries: list[tuple[str, dict]]) -> None:
 
 
 def demo(
-    symbol: str = "SPY",
+    symbol: str = "AAPL",
     start: str = "2005-01-01",
     end: str = "2026-01-01",
     timeframe: str = "1d",
 ):
-    creds = load_credentials()
-    print(f"\nFetching {symbol} {timeframe} bars from Alpaca ({start} → {end})...")
-    data = fetch_alpaca_bars(
-        symbol, start=start, end=end, timeframe=timeframe,
-        api_key=creds["key"], api_secret=creds["secret"],
-    )
+    load_dotenv()
+    _env = dotenv_values()
+    api_key = _env.get("LSE_DATA", "")
+
+    print(f"\nFetching {symbol} {timeframe} bars from LSE ({start} → {end})...")
+    data = fetch_lse_bars(symbol, start=start, end=end, timeframe=timeframe, api_key=api_key)
     print(f"  {len(data)} bars loaded  |  {data.index[0].date()} → {data.index[-1].date()}")
 
     universe = Universe(symbols=[symbol])
@@ -361,10 +329,10 @@ def demo(
     )
     print(f"\n{ttv}")
 
-    config = BacktestConfig(initial_capital=100_000.0, max_position_pct=1.0, leverage=1.0)
+    config     = BacktestConfig(initial_capital=100_000.0, max_position_pct=1.0, leverage=1.0)
     cost_model = CompositeCostModel(default_cost_stack())
-    sizer = FixedNotionalSizer(notional=100_000)
-    stoploss = NopStopLoss()
+    sizer      = FixedNotionalSizer(notional=100_000)
+    stoploss   = NopStopLoss()
 
     def run_on(strategy, univ):
         return Backtester(
@@ -394,7 +362,7 @@ def demo(
         ),
         ttv.train,
     )
-    train_bah  = run_on(BuyAndHoldStrategy(symbol=symbol), ttv.train)
+    train_bah = run_on(BuyAndHoldStrategy(symbol=symbol), ttv.train)
 
     _print_metrics_table([
         ("EMA/RSI",    train_ema.summary()),
@@ -415,10 +383,10 @@ def demo(
     print(f"  IS/OOS efficiency : {wf.efficiency_ratio:.2f}  (sub-OOS Sharpe / IS Sharpe)")
     tbl = wf.summary_table()
     for fold, row in tbl.iterrows():
-        is_sr   = row.get("is_sharpe_ratio",       float("nan"))
-        oos_sr  = row.get("oos_sharpe_ratio",      float("nan"))
-        is_ret  = row.get("is_total_return_pct",   float("nan"))
-        oos_ret = row.get("oos_total_return_pct",  float("nan"))
+        is_sr   = row.get("is_sharpe_ratio",      float("nan"))
+        oos_sr  = row.get("oos_sharpe_ratio",     float("nan"))
+        is_ret  = row.get("is_total_return_pct",  float("nan"))
+        oos_ret = row.get("oos_total_return_pct", float("nan"))
         print(
             f"    Fold {fold}  "
             f"IS  ret={is_ret:>7.2f}%  SR={is_sr:>6.3f}  │  "
@@ -437,9 +405,9 @@ def demo(
 
     ema_grid = {"slow": [100, 150, 200], "rsi_overbought": [65.0, 70.0, 75.0, 80.0, 85.0, 90.0, 100.0]}
     bb_grid  = {"window": [10, 15, 20, 30], "num_std": [1.5, 2.0, 2.5]}
-    n_ema_trials = 3 * 3        # 9
-    n_bb_trials  = 4 * 3       # 12
-    n_trials     = n_ema_trials + n_bb_trials  # used for DSR in validate
+    n_ema_trials = 3 * 7
+    n_bb_trials  = 4 * 3
+    n_trials     = n_ema_trials + n_bb_trials
 
     print(f"\nSweeping EmaRsiStrategy ({n_ema_trials} combos) on TEST data...")
     ema_sweep = ParamSweep(
@@ -447,7 +415,7 @@ def demo(
         param_grid=ema_grid,
         config=config, cost_model=cost_model, sizer=sizer, stop_loss=stoploss,
     ).run(universe=ttv.test, timeframe=timeframe)
-    best_ema_row  = ema_sweep.best("sharpe_ratio")
+    best_ema_row    = ema_sweep.best("sharpe_ratio")
     best_ema_params = {k: best_ema_row[k] for k in ema_grid}
     best_ema_params["slow"] = int(best_ema_params["slow"])
     print(f"  Best EMA params : {best_ema_params}  →  SR={best_ema_row['sharpe_ratio']:.3f}")
@@ -485,7 +453,7 @@ def demo(
     val_comp = run_on(final_composite, ttv.validate)
     val_bah  = run_on(BuyAndHoldStrategy(symbol=symbol), ttv.validate)
 
-    run_dir = val_comp.save("ttv_validate")
+    run_dir = val_comp.save("ttv_validate_lse")
     print(f"  Result saved to: {run_dir}")
 
     _print_metrics_table([
