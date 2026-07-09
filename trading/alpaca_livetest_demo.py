@@ -16,13 +16,80 @@ Credentials: set ALP_PAPER_KEY and ALP_PAPER_SECRET in a .env file (or env).
 
 from __future__ import annotations
 
+import pandas as pd
 from dotenv import load_dotenv, dotenv_values
 
-from core.models import LiveConfig, ExchangeCredentials
+from core.models import LiveConfig, ExchangeCredentials, Allocation, Side
 from execution import Engine as LiveEngine
-from strategy.built_in import EmaRsiStrategy
+from strategy.built_in import SingleAssetStrategy
+from strategy.indicators import ema, rsi
 from strategy.sizing import FixedNotionalSizer
 from strategy.stops import NopStopLoss
+
+
+class EmaRsiStrategy(SingleAssetStrategy):
+    """
+    Long-only dual-EMA crossover filtered by RSI.
+
+    Entry:  fast EMA crosses above slow EMA AND RSI < rsi_overbought
+    Exit:   fast EMA crosses below slow EMA OR  RSI >= rsi_overbought
+
+    Works in both backtest and live contexts via SingleAssetStrategy.bar().
+    """
+
+    def __init__(
+        self,
+        symbol: str,
+        fast: int = 50,
+        slow: int = 200,
+        rsi_period: int = 14,
+        rsi_overbought: float = 80.0,
+        **kw,
+    ):
+        super().__init__(symbol=symbol, **kw)
+        self.fast = fast
+        self.slow = slow
+        self.rsi_period = rsi_period
+        self.rsi_overbought = rsi_overbought
+
+    @property
+    def params(self) -> dict:
+        return {
+            "fast": self.fast,
+            "slow": self.slow,
+            "rsi_period": self.rsi_period,
+            "rsi_overbought": self.rsi_overbought,
+        }
+
+    def setup_data(self, data: pd.DataFrame, _l2=None):
+        data["ema_fast"] = ema(data["close"], self.fast)
+        data["ema_slow"] = ema(data["close"], self.slow)
+        data["rsi"]      = rsi(data["close"], self.rsi_period)
+
+    def bar(self, data: pd.DataFrame, idx: int) -> Allocation:
+        if idx < self.slow:
+            return Allocation()
+
+        ema_f   = data["ema_fast"].iat[idx]
+        ema_s   = data["ema_slow"].iat[idx]
+        rsi_val = data["rsi"].iat[idx]
+
+        if any(v != v for v in (ema_f, ema_s, rsi_val)):
+            return Allocation()
+
+        bullish = ema_f > ema_s and rsi_val < self.rsi_overbought
+
+        if bullish:
+            return Allocation(
+                side=Side.LONG,
+                weight=1.0,
+                confidence=1.0,
+                reason=f"EMA{self.fast}>{self.slow} | RSI={rsi_val:.0f}",
+            )
+
+        return Allocation(
+            reason=f"no signal | EMA{self.fast}={ema_f:.2f} EMA{self.slow}={ema_s:.2f} RSI={rsi_val:.0f}"
+        )
 
 
 def demo(
