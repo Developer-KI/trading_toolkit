@@ -1,6 +1,6 @@
 # Quantitative Trading Framework
 
-A modular, production-ready Python framework for developing, backtesting, stress-testing, and live-trading quantitative strategies across crypto perpetual futures, spot markets, and US equities.
+A modular, production-ready Python framework for developing, backtesting, stress-testing, and live-trading quantitative strategies.
 
 ---
 
