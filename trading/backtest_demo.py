@@ -33,7 +33,7 @@ def fetch_lse_bars(
     symbol: str,
     start: str,
     end: str,
-    timeframe: str = "1d",
+    timeframe: str = "1s",
     api_key: str | None = None,
 ) -> pd.DataFrame:
     """
@@ -484,7 +484,7 @@ def demo(
     symbol: str = "AAPL",
     start: str = "2005-01-01",
     end: str = "2026-01-01",
-    timeframe: str = "1d",
+    timeframe: str = "1m",
 ):
     load_dotenv()
     _env = dotenv_values()

@@ -1,18 +1,12 @@
 __pycache__
+*.egg-info/
 .venv
+
 .vscode
 
-logs/
-build/
+/logs
 /data
-/research
 /skills
 
 **/p_* 
-*.png
-*.csv
-*.egg-info/
-
 .env
-todo.txt
-
