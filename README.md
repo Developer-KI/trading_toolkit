@@ -1,10 +1,8 @@
 # Quantitative Trading Framework
 
----
-
 ## About
 
-My focus is on **doing things right**: clean dependency graphs, protocol-driven interfaces, statistically sound backtest methodology (no look-ahead, proper train/test/validate splits, deflated Sharpe ratio), and code that is easy to extend without being over-engineered.
+My focus is on **doing things right**: clean dependency graphs, protocol-driven interfaces, statistically sound backtest methodology, and code that is easy to extend without being over-engineered.
 
 **Contact:** [ivanov.r.kiril@abv.bg](mailto:ivanov.r.kiril@abv.bg)
 
