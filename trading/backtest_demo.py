@@ -5,10 +5,10 @@ from dotenv import load_dotenv, dotenv_values
 
 from core.models import Allocation, BacktestConfig, Side
 from core.universe import Universe
-from backtester.engine import Backtester
-from backtester.costs import CompositeCostModel, default_cost_stack
-from backtester.stress import MonteCarloStress, ParamSweep, RegimeStressTest
-from hypothesis import (
+from testing.backtester.engine import Backtester
+from testing.backtester.costs import CompositeCostModel, default_cost_stack
+from testing.backtester.stress import MonteCarloStress, ParamSweep, RegimeStressTest
+from testing.hypothesis import (
     HypothesisTests,
     PermutationTest,
     BootstrapCI,

@@ -19,8 +19,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from backtester.engine import Backtester, BacktestResult
-from backtester.stress import StressResult
+from testing.backtester.engine import Backtester, BacktestResult
+from testing.backtester.stress import StressResult
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -317,7 +317,7 @@ class ProbabilityOfBacktestOverfitting:
         timeframe: str | None = None,
         metric: str = "sharpe_ratio",
     ) -> dict[str, Any]:
-        from hypothesis.splits import _slice_universe
+        from testing.hypothesis.splits import _slice_universe
         from strategy.built_in import SingleAssetStrategy
 
         fixed = fixed_params or {}

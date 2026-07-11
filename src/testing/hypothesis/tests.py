@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from backtester.engine import BacktestResult
+from testing.backtester.engine import BacktestResult
 
 
 # ── Result container ─────────────────────────────────────────────────────────

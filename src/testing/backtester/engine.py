@@ -35,7 +35,7 @@ from core.models import (
     Trade,
 )
 from core.parser import timeframe_to_seconds
-from backtester.costs import CostModel, CompositeCostModel, NullCostModel
+from testing.backtester.costs import CostModel, CompositeCostModel, NullCostModel
 from strategy.sizing import Sizer, SizingContext, default_sizer
 from strategy.stops import (
     StopLoss,

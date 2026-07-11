@@ -93,12 +93,6 @@ python -m src.data.historical.hyperliquid --coin ETH --start 2024-01-01
 python -m src.data.feeds.binance --coin ETHUSDT --market futures --streams trades l2 funding
 ```
 
-**Alpaca** (US equities/ETFs/crypto):
-
-```bash
-python -m src.data.feeds.alpaca --symbol SPY --timeframe 1Min
-```
-
 **Data directory layout:**
 
 ```
@@ -109,9 +103,8 @@ data/
 │   └── BINANCE_PERPETUALS/<symbol>/*.parquet
 ├── l2/
 │   └── HYPERLIQUID_PERPETUALS/<symbol>/*.parquet
-├── funding/
-│   └── HYPERLIQUID_PERPETUALS/<symbol>/*.parquet
-└── sentiment/
+└── funding/
+   └── HYPERLIQUID_PERPETUALS/<symbol>/*.parquet
 ```
 
 ### Step 3 — Load & Parse Data

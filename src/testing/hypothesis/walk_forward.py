@@ -18,8 +18,8 @@ import pandas as pd
 import numpy as np
 
 from core.models import BacktestConfig
-from backtester.engine import Backtester, BacktestResult
-from backtester.costs import CostModel
+from testing.backtester.engine import Backtester, BacktestResult
+from testing.backtester.costs import CostModel
 from strategy.base import Strategy
 from strategy.built_in import SingleAssetStrategy
 from core.universe import Universe
@@ -187,7 +187,7 @@ class WalkForwardAnalysis:
         opt_metric: str,
     ) -> dict:
         """Mini param sweep on the IS fold; return the best parameter combo."""
-        from backtester.stress import ParamSweep
+        from testing.backtester.stress import ParamSweep
         sweep = ParamSweep(
             strategy_cls=self.strategy_cls,
             param_grid=param_grid,

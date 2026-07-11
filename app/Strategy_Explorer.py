@@ -150,7 +150,7 @@ if enable_overlay and run_overlay and sig_cls is not None:
     with st.spinner("Running strategy on loaded data…"):
         try:
             from strategy.built_in import SingleAssetStrategy
-            from backtester.engine import Backtester
+            from testing.backtester.engine import Backtester
             from core.models import BacktestConfig
 
             strategy = sig_cls(symbol=viz_symbol, **sig_params) \

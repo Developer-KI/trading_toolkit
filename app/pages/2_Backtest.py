@@ -79,8 +79,8 @@ if run_bt:
                     st.stop()
 
                 from strategy.built_in import SingleAssetStrategy
-                from backtester.engine import Backtester
-                from backtester.costs import CompositeCostModel, aggressive_cost_stack
+                from testing.backtester.engine import Backtester
+                from testing.backtester.costs import CompositeCostModel, aggressive_cost_stack
 
                 strategy = signal_cls(symbol=bt_symbol, **sig_params) \
                     if issubclass(signal_cls, SingleAssetStrategy) \
@@ -213,7 +213,7 @@ with tab_hypothesis:
 
     if run_ht:
         try:
-            from hypothesis import HypothesisTests, PermutationTest, BootstrapCI, DeflatedSharpeRatio, report
+            from testing.hypothesis import HypothesisTests, PermutationTest, BootstrapCI, DeflatedSharpeRatio, report
 
             with st.spinner("Running hypothesis tests…"):
                 tests    = HypothesisTests.run_all(result)
@@ -232,7 +232,7 @@ with tab_hypothesis:
         tests, pt, ci, dsr = ht_data
 
         st.subheader("Statistical Test Battery")
-        from hypothesis import report
+        from testing.hypothesis import report
         st.code(report(tests))
 
         st.subheader("Permutation Test  (Sharpe ratio)")
@@ -303,8 +303,8 @@ with tab_sweep:
                             cache_key_prefix="bt",
                         )
                         if df_sweep is not None:
-                            from backtester.costs import CompositeCostModel, aggressive_cost_stack
-                            from backtester.stress import ParamSweep
+                            from testing.backtester.costs import CompositeCostModel, aggressive_cost_stack
+                            from testing.backtester.stress import ParamSweep
 
                             param_grid = {p1: vals1}
                             if vals2:
@@ -399,8 +399,8 @@ with tab_regime:
             if df_reg is not None:
                 try:
                     from strategy.built_in import SingleAssetStrategy
-                    from backtester.stress import RegimeStressTest
-                    from backtester.costs import CompositeCostModel, aggressive_cost_stack
+                    from testing.backtester.stress import RegimeStressTest
+                    from testing.backtester.costs import CompositeCostModel, aggressive_cost_stack
 
                     strategy_reg = signal_cls(symbol=bt_symbol, **sig_params) \
                         if issubclass(signal_cls, SingleAssetStrategy) \
@@ -462,7 +462,7 @@ with tab_mc:
 
             if run_mc:
                 try:
-                    from backtester.stress import MonteCarloStress
+                    from testing.backtester.stress import MonteCarloStress
                     with st.spinner(f"Running {n_sims} simulations…"):
                         mc_result = MonteCarloStress(
                             n_simulations=int(n_sims), seed=int(mc_seed), method=mc_method,
