@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import pandas as pd
-from dotenv import load_dotenv, dotenv_values
+from dotenv import load_dotenv
 
+from data.historical.lse_parse import (
+    fetch_ohlcv as _lse_fetch_ohlcv,
+    build_universe as _lse_build_universe,
+)
 from core.models import Allocation, BacktestConfig, Side
 from core.universe import Universe
 from testing.backtester.engine import Backtester
@@ -23,63 +27,6 @@ from strategy.indicators import bollinger, ema, rsi
 from strategy.sizing import FixedNotionalSizer
 from strategy.stops import NopStopLoss
 from testing.backtester.costs import ExchangeFeeCost, FixedSlippageCost
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  Data fetching
-# ═══════════════════════════════════════════════════════════════════════════
-
-def fetch_lse_bars(
-    symbol: str,
-    start: str,
-    end: str,
-    timeframe: str = "1s",
-    api_key: str | None = None,
-) -> pd.DataFrame:
-    """
-    Fetch OHLCV bars from London Strategic Edge for a single symbol.
-
-    Parameters
-    ----------
-    symbol    : ticker exactly as in the LSE catalog, e.g. "AAPL", "BTC/USD"
-    start     : ISO date string, e.g. "2005-01-01"
-    end       : ISO date string, e.g. "2026-01-01"
-    timeframe : 1s 5s 15s 30s 1m 3m 5m 15m 30m 1h 4h 1d 1w 1mo (default 1d)
-    api_key   : LSE key; falls back to LSE_DATA env var
-
-    Returns
-    -------
-    DataFrame with DatetimeIndex and columns [open, high, low, close, volume]
-    """
-    try:
-        from lse import LSE
-    except ImportError as exc:
-        raise ImportError(
-            "Missing dependency: lse-data. "
-            "Install with: pip install 'lse-data[frames]'"
-        ) from exc
-
-    load_dotenv()
-    _env = dotenv_values()
-    key = api_key or _env.get("LSE_DATA", "")
-    if not key:
-        raise ValueError(
-            "LSE API key required. Set LSE_DATA in your .env file "
-            "or pass api_key directly."
-        )
-
-    client = LSE(api_key=key)
-    rows = client.candles(symbol, timeframe, start=start, end=end)
-
-    df = pd.DataFrame(rows)
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-    df = df.set_index("timestamp").sort_index()
-
-    # Forex candles carry no volume — fill with zero so downstream code is uniform
-    if "volume" not in df.columns:
-        df["volume"] = 0
-
-    return df[["open", "high", "low", "close", "volume"]]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -518,15 +465,12 @@ def demo(
     timeframe: str = "1d",
 ):
     load_dotenv()
-    _env = dotenv_values()
-    api_key = _env.get("LSE_DATA", "")
 
     print(f"\nFetching {symbol} {timeframe} bars from LSE ({start} → {end})...")
-    data = fetch_lse_bars(symbol, start=start, end=end, timeframe=timeframe, api_key=api_key)
+    data = _lse_fetch_ohlcv(symbol, timeframe=timeframe, start=start, end=end)
     print(f"  {len(data)} bars loaded  |  {data.index[0].date()} → {data.index[-1].date()}")
 
-    universe = Universe(symbols=[symbol])
-    universe.add_asset(symbol, data)
+    universe = _lse_build_universe(data, symbol=symbol)
 
     # ── Train / Test / Validate split (60 / 20 / 20, 10-bar embargo) ──────
     ttv = TrainTestValidateSplit.by_fractions(

@@ -21,7 +21,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from components.lse_data import TIMEFRAMES, BACKTEST_TIMEFRAMES, build_universe, get_api_key, load_bars_cached
+from components.lse_data import TIMEFRAMES, BACKTEST_TIMEFRAMES, build_universe, get_api_key, load_bars_cached, fetch_catalog
 from components.charts import (
     atr_chart, bollinger_traces, candlestick_chart,
     equity_chart, macd_chart, rsi_chart, signal_log_chart,
@@ -73,11 +73,101 @@ with st.sidebar:
 
     st.divider()
     st.header("Data")
-    symbol = st.text_input("Symbol", value="AAPL", key="sym").upper()
+
+    # ── Symbol catalog ────────────────────────────────────────────────────
+    _CAT_KEY = "_lse_catalog"
+    # Auto-load once per session when a key is available; never retry after failure.
+    if api_key and _CAT_KEY not in st.session_state:
+        with st.spinner("Loading symbol catalog…"):
+            _rows = fetch_catalog(api_key)
+            st.session_state[_CAT_KEY] = _rows if _rows else []
+
+    _catalog: list[dict] = st.session_state.get(_CAT_KEY) or []
+
+    # Substrings that mark non-candle categories/datasets (bonds, economics, options).
+    # Substring matching catches variants like "bond_yield", "government_bonds", etc.
+    _NO_CANDLE_TERMS = ("option", "economic", "bond", "yield", "derivative", "credit")
+
+    def _has_candle_data(r: dict) -> bool:
+        cat     = r.get("category", "").lower()
+        dataset = r.get("dataset",  "").lower()
+        has_history = bool(r.get("first"))
+        excluded = any(t in cat or t in dataset for t in _NO_CANDLE_TERMS)
+        return has_history and not excluded
+
+    if _catalog:
+        # Keep only instruments that support candles() and have actual history
+        _candle_catalog = [r for r in _catalog if _has_candle_data(r)]
+
+        _cat_col, _ref_col = st.columns([4, 1])
+        # Unique categories from candlestick-capable instruments only
+        _raw_cats = sorted({r.get("category", "") for r in _candle_catalog if r.get("category")})
+        _sel_cat = _cat_col.selectbox(
+            "Asset Type",
+            ["(All)"] + _raw_cats,
+            key="cat_filter",
+            format_func=lambda x: x.title() if x != "(All)" else x,
+        )
+        if _ref_col.button("↻", key="refresh_catalog", help="Reload symbol list"):
+            st.session_state.pop(_CAT_KEY, None)
+            st.rerun()
+
+        # Filter and deduplicate by symbol (keep first occurrence per symbol)
+        _filtered = _candle_catalog if _sel_cat == "(All)" else [
+            r for r in _candle_catalog if r.get("category") == _sel_cat
+        ]
+        _seen: set[str] = set()
+        _deduped: list[dict] = []
+        for _r in sorted(_filtered, key=lambda r: r.get("symbol", "")):
+            if _r.get("symbol") and _r["symbol"] not in _seen:
+                _seen.add(_r["symbol"])
+                _deduped.append(_r)
+
+        # Build display labels: "SYMBOL — Name (Country)" or just "SYMBOL"
+        def _sym_label(r: dict) -> str:
+            base = r["symbol"]
+            if r.get("name"):
+                base += f" — {r['name']}"
+            if r.get("country"):
+                base += f" ({r['country']})"
+            return base
+
+        _labels = [_sym_label(r) for r in _deduped]
+        # Default to AAPL when visible, else fall back to first entry.
+        # Streamlit clamps stored index to 0 automatically when category changes.
+        _default_idx = next(
+            (i for i, r in enumerate(_deduped) if r["symbol"] == "AAPL"), 0
+        )
+        _choice_idx = st.selectbox(
+            "Symbol", range(len(_labels)), index=_default_idx,
+            format_func=lambda i: _labels[i],
+            key="sym_cat",
+        )
+        _chosen = _deduped[_choice_idx]
+        symbol = _chosen["symbol"]
+
+        def _date_only(val) -> str:
+            if not val:
+                return "—"
+            try:
+                return pd.to_datetime(val).strftime("%Y-%m-%d")
+            except Exception:
+                return str(val)[:10]
+
+        st.caption(f"Available: {_date_only(_chosen.get('first'))} → {_date_only(_chosen.get('last'))}")
+    else:
+        symbol = st.text_input("Symbol", value="AAPL", key="sym").upper()
+        if api_key and not _catalog:
+            st.caption("Symbol catalog unavailable — check API key or refresh.")
+        elif not api_key:
+            st.caption("Enter an API key above to browse all available symbols.")
+
     timeframe = st.selectbox("Timeframe", TIMEFRAMES, index=6, key="tf")
     col_s, col_e = st.columns(2)
-    start_date = col_s.date_input("From", value=date.today() - timedelta(days=730), key="start")
-    end_date   = col_e.date_input("To",   value=date.today(), key="end")
+    start_date = col_s.date_input("From", value=date.today() - timedelta(days=730),
+                                  min_value=date(1990, 1, 1), key="start")
+    end_date   = col_e.date_input("To",   value=date.today(),
+                                  min_value=date(1990, 1, 1), key="end")
     load_btn = st.button("Load Data", type="primary", use_container_width=True, key="load")
 
     df_loaded: pd.DataFrame | None = st.session_state.get("main_ohlcv")
@@ -160,6 +250,14 @@ if load_btn:
             for k in ["main_bt_result", "main_ht_results",
                       "main_sweep_result", "main_regime_result", "main_mc_result"]:
                 st.session_state.pop(k, None)
+            # Inform the user when the API returned data starting later than requested.
+            if isinstance(df.index, pd.DatetimeIndex) and len(df):
+                actual_start = df.index[0].date()
+                if actual_start > start_date:
+                    st.info(
+                        f"Earliest available bar for {symbol} is **{actual_start}** "
+                        f"(requested from {start_date}). Loaded data from that point."
+                    )
             st.rerun()
 
 # ── Run backtest ──────────────────────────────────────────────────────────────
@@ -369,19 +467,73 @@ with tab_results:
     else:
         summary = result.summary()
 
+        # ── Horizon mode ──────────────────────────────────────────────────
+        is_annual  = summary.get("annualized", True)
+        pfx        = "ann" if is_annual else "period"
+        scale_lbl  = "Ann." if is_annual else "Period"
+
+        _eq_tmp = result.equity_curve
+        if isinstance(_eq_tmp.index, pd.DatetimeIndex) and len(_eq_tmp) > 1:
+            _cal_years = (_eq_tmp.index[-1] - _eq_tmp.index[0]).total_seconds() / (365.25 * 24 * 3600)
+            _cal_label = f"{_cal_years:.2f} yr"
+        else:
+            _cal_label = "—"
+
+        if is_annual:
+            st.info(
+                f"**Annualized metrics** — backtest spans ~{_cal_label}. "
+                "Sharpe, Sortino, return, and vol are all scaled to a **calendar year** "
+                "(252 trading days). CAGR is the geometric annualized return."
+            )
+        else:
+            st.warning(
+                f"**Sub-year backtest (~{_cal_label})** — Sharpe, Sortino, return, and vol "
+                "reflect the **actual observed period only** and are NOT extrapolated to a "
+                "full year. CAGR equals Total Return (no annualization applied)."
+            )
+
         st.subheader("Summary")
-        c1 = st.columns(4)
-        c1[0].metric("Total Return",  f"{summary.get('total_return_pct', 0):.2f}%")
-        c1[1].metric("Sharpe Ratio",  f"{summary.get('sharpe_ratio', 0):.3f}")
-        c1[2].metric("Max Drawdown",  f"{summary.get('max_drawdown_pct', 0):.2f}%")
-        c1[3].metric("Win Rate",      f"{summary.get('win_rate_pct', 0):.1f}%")
+
+        # ── Row 1: return & core risk ─────────────────────────────────────
+        # Annual: 5 cols — show CAGR as a distinct annualized return
+        # Sub-year: 4 cols — CAGR == Total Return so omit it
+        if is_annual:
+            c1 = st.columns(5)
+            c1[0].metric("Total Return",        f"{summary.get('total_return_pct', 0):.2f}%")
+            c1[1].metric("CAGR (Ann.)",          f"{summary.get('cagr_pct', 0):.2f}%")
+            c1[2].metric(f"Sharpe ({scale_lbl})", f"{summary.get('sharpe_ratio', 0):.3f}")
+            c1[3].metric("Max Drawdown",         f"{summary.get('max_drawdown_pct', 0):.2f}%")
+            c1[4].metric("Win Rate",             f"{summary.get('win_rate_pct', 0):.1f}%")
+        else:
+            c1 = st.columns(4)
+            c1[0].metric("Total Return (Period)", f"{summary.get('total_return_pct', 0):.2f}%")
+            c1[1].metric(f"Sharpe ({scale_lbl})",  f"{summary.get('sharpe_ratio', 0):.3f}")
+            c1[2].metric("Max Drawdown",           f"{summary.get('max_drawdown_pct', 0):.2f}%")
+            c1[3].metric("Win Rate",               f"{summary.get('win_rate_pct', 0):.1f}%")
+
+        # ── Row 2: risk-adjusted + vol + trade count ──────────────────────
+        _calmar_val = summary.get("calmar_ratio")
+        _calmar_str = f"{_calmar_val:.3f}" if isinstance(_calmar_val, float) else "∞"
+        _calmar_lbl = "Calmar (CAGR/MaxDD)" if is_annual else "Recovery (Return/MaxDD)"
+
+        _pf_val = summary.get("profit_factor")
+        _pf_str = f"{_pf_val:.3f}" if isinstance(_pf_val, float) else "∞"
+
+        _vol_val = summary.get(f"{pfx}_volatility_pct") or 0.0
 
         c2 = st.columns(5)
-        c2[0].metric("Calmar",        f"{summary.get('calmar_ratio', 0):.3f}")
-        c2[1].metric("Sortino",       f"{summary.get('sortino_ratio', 0):.3f}")
-        c2[2].metric("Profit Factor", f"{summary.get('profit_factor', 0):.3f}")
-        c2[3].metric("Trades",        f"{summary.get('num_trades', 0)}")
-        c2[4].metric("Total Fees",    f"${summary.get('total_fees', 0):,.2f}")
+        c2[0].metric(_calmar_lbl,              _calmar_str)
+        c2[1].metric(f"Sortino ({scale_lbl})", f"{summary.get('sortino_ratio', 0):.3f}")
+        c2[2].metric(f"Vol ({scale_lbl})",     f"{_vol_val:.2f}%")
+        c2[3].metric("Profit Factor",          _pf_str)
+        c2[4].metric("Trades",                 f"{summary.get('num_trades', 0)}")
+
+        # ── Row 3: cost + trade quality ───────────────────────────────────
+        c3 = st.columns(4)
+        c3[0].metric("Total Fees",   f"${summary.get('total_fees', 0):,.2f}")
+        c3[1].metric("Avg Win %",    f"{summary.get('avg_win_pct', 0):.2f}%")
+        c3[2].metric("Avg Loss %",   f"{summary.get('avg_loss_pct', 0):.2f}%")
+        c3[3].metric("% In Market",  f"{summary.get('pct_in_market', 0):.1f}%")
 
         st.divider()
 
@@ -512,9 +664,7 @@ with tab_hypothesis:
 # ══════════════════════════════════════════════════════════════ Param Sweep tab
 
 with tab_sweep:
-    if result is None:
-        st.info("Run a backtest first (Results tab).")
-    elif signal_cls is None:
+    if signal_cls is None:
         st.info("Select a signal in the sidebar first.")
     else:
         sweep_params = [
@@ -543,8 +693,15 @@ with tab_sweep:
 
             if st.button("Run Sweep", type="primary", key="run_sweep"):
                 try:
-                    vals1 = [float(v.strip()) for v in p1_vals.split(",") if v.strip()]
-                    vals2 = [float(v.strip()) for v in p2_vals.split(",") if v.strip()] if p2_vals else []
+                    _sw_sig = inspect.signature(signal_cls.__init__).parameters
+
+                    def _cast_sweep(name: str, raw: str) -> list:
+                        default = _sw_sig[name].default if name in _sw_sig else 0.0
+                        fn = int if isinstance(default, int) else float
+                        return [fn(v.strip()) for v in raw.split(",") if v.strip()]
+
+                    vals1 = _cast_sweep(p1, p1_vals)
+                    vals2 = _cast_sweep(p2, p2_vals) if p2_vals and p2 != "(none)" else []
                     if not vals1:
                         st.warning("Enter at least one value for Parameter 1.")
                     else:
@@ -554,6 +711,12 @@ with tab_sweep:
                         param_grid = {p1: vals1}
                         if vals2:
                             param_grid[p2] = vals2
+
+                        # Pass current sidebar signal params as fixed_params for non-swept keys,
+                        # so sweep is consistent with the rest of the session configuration.
+                        swept_keys = set(param_grid.keys())
+                        fixed = {k: v for k, v in sig_params.items() if k not in swept_keys}
+
                         n_combos = len(vals1) * max(len(vals2), 1)
                         uni  = build_universe(main_symbol, df)
                         cost = CompositeCostModel(models=aggressive_cost_stack())
@@ -566,9 +729,12 @@ with tab_sweep:
                                 cost_model=cost,
                                 sizer=sizer,
                                 stop_loss=stop,
+                                fixed_params=fixed,
                             ).run(universe=uni, timeframe=main_timeframe)
 
-                        st.session_state["main_sweep_result"] = (sweep_result, p1, p2, metric_pick, vals1, vals2)
+                        st.session_state["main_sweep_result"] = (
+                            sweep_result, p1, p2, metric_pick, vals1, vals2,
+                        )
                         st.info(f"Tracked {n_combos} trial(s) — enter this in Hypothesis Tests for DSR correction.")
                         st.success("Sweep complete.")
                 except Exception as e:
@@ -577,45 +743,70 @@ with tab_sweep:
 
     sweep_data = st.session_state.get("main_sweep_result")
     if sweep_data:
-        sweep, p1, p2, metric, vals1, vals2 = sweep_data
-        summary_df: pd.DataFrame = sweep.summary
+        _sw, _p1, _p2, _metric, _v1, _v2 = sweep_data
+        _sdf: pd.DataFrame = _sw.summary
 
-        if (p2 and p2 != "(none)" and vals2
-                and all(c in summary_df.columns for c in [metric, p1, p2])):
-            pivot = summary_df.pivot(index=p2, columns=p1, values=metric)
-            fig_heat = go.Figure(go.Heatmap(
-                z=pivot.values, x=pivot.columns.tolist(), y=pivot.index.tolist(),
-                colorscale="RdYlGn",
-                text=[[f"{v:.3f}" for v in row] for row in pivot.values],
-                texttemplate="%{text}",
-            ))
-            fig_heat.update_layout(
-                template="plotly_dark", height=420,
-                title=f"{metric} — {p1} vs {p2}",
-                xaxis_title=p1, yaxis_title=p2,
-                margin=dict(l=40, r=40, t=50, b=20),
-            )
-            st.plotly_chart(fig_heat, use_container_width=True)
-        elif metric in summary_df.columns and p1 in summary_df.columns:
-            fig_bar = go.Figure(go.Bar(
-                x=summary_df[p1].astype(str), y=summary_df[metric], marker_color="#2196F3",
-            ))
-            fig_bar.update_layout(
-                template="plotly_dark", height=300,
-                title=f"{metric} vs {p1}",
-                xaxis_title=p1, yaxis_title=metric,
-                margin=dict(l=40, r=40, t=50, b=20),
-            )
-            st.plotly_chart(fig_bar, use_container_width=True)
+        _param_cols = [c for c in [_p1, _p2] if c and c != "(none)" and c in _sdf.columns]
 
-        if metric in summary_df.columns:
-            best  = sweep.best(metric)
-            worst = sweep.worst(metric)
+        # ── Chart ─────────────────────────────────────────────────────────
+        if len(_param_cols) == 2 and _metric in _sdf.columns:
+            _plot_df = _sdf[_param_cols + [_metric]].dropna(subset=[_metric])
+            if not _plot_df.empty:
+                pivot = _plot_df.pivot(index=_p2, columns=_p1, values=_metric)
+                _z = [[float(v) if pd.notna(v) else None for v in row] for row in pivot.values]
+                _t = [[f"{v:.3f}" if v is not None else "—" for v in row] for row in _z]
+                fig_heat = go.Figure(go.Heatmap(
+                    z=_z, x=[str(c) for c in pivot.columns], y=[str(r) for r in pivot.index],
+                    colorscale="RdYlGn", text=_t, texttemplate="%{text}",
+                ))
+                fig_heat.update_layout(
+                    template="plotly_dark", height=420,
+                    title=f"{_metric} — {_p1} vs {_p2}",
+                    xaxis_title=_p1, yaxis_title=_p2,
+                    margin=dict(l=40, r=40, t=50, b=20),
+                )
+                st.plotly_chart(fig_heat, use_container_width=True)
+        elif _metric in _sdf.columns and _p1 in _sdf.columns:
+            _plot_df = _sdf[[_p1, _metric]].dropna(subset=[_metric]).sort_values(_p1)
+            if not _plot_df.empty:
+                fig_bar = go.Figure(go.Bar(
+                    x=_plot_df[_p1].astype(str), y=_plot_df[_metric], marker_color="#2196F3",
+                ))
+                fig_bar.update_layout(
+                    template="plotly_dark", height=300,
+                    title=f"{_metric} vs {_p1}",
+                    xaxis_title=_p1, yaxis_title=_metric,
+                    margin=dict(l=40, r=40, t=50, b=20),
+                )
+                st.plotly_chart(fig_bar, use_container_width=True)
+
+        # ── Best / worst ──────────────────────────────────────────────────
+        _valid_col = _sdf[_metric].dropna() if _metric in _sdf.columns else pd.Series(dtype=float)
+        if not _valid_col.empty:
+            _best_row  = _sw.best(_metric)
+            _worst_row = _sw.worst(_metric)
+
+            def _fmt_metric(v) -> str:
+                return f"{v:.4f}" if isinstance(v, (int, float)) and pd.notna(v) else str(v)
+
+            _best_params  = {k: _best_row[k]  for k in _param_cols if k in _best_row.index}
+            _worst_params = {k: _worst_row[k] for k in _param_cols if k in _worst_row.index}
+
             b1, b2 = st.columns(2)
-            b1.success(f"Best  {metric}: {best[metric]:.4f} @ {best.drop(metric).to_dict()}")
-            b2.error(  f"Worst {metric}: {worst[metric]:.4f} @ {worst.drop(metric).to_dict()}")
+            b1.success(f"Best  {_metric}: {_fmt_metric(_best_row[_metric])}  →  {_best_params}")
+            b2.error(  f"Worst {_metric}: {_fmt_metric(_worst_row[_metric])}  →  {_worst_params}")
 
-        st.dataframe(summary_df, use_container_width=True)
+        # ── Results table: param cols + key metrics only ──────────────────
+        _KEY_SWEEP_METRICS = [
+            "sharpe_ratio", "total_return_pct", "cagr_pct",
+            "max_drawdown_pct", "calmar_ratio", "sortino_ratio",
+            "win_rate_pct", "profit_factor", "num_trades", "total_fees",
+        ]
+        _show_cols = _param_cols + [c for c in _KEY_SWEEP_METRICS if c in _sdf.columns]
+        if "error" in _sdf.columns:
+            _show_cols.append("error")
+        _display_sdf = _sdf[_show_cols].sort_values(_p1, ignore_index=True)
+        st.dataframe(_display_sdf, use_container_width=True)
 
 # ══════════════════════════════════════════════════════════════ Regime Test tab
 

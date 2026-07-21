@@ -138,6 +138,16 @@ def load_bars_cached(
         df = fetch_ohlcv(symbol, timeframe, start, end, api_key, api_secret)
         st.session_state[cache_key] = df
         return df
+    except ValueError as e:
+        msg = str(e)
+        if "No data returned" in msg:
+            st.warning(
+                f"{msg} The requested start date may be before available history. "
+                "Try a more recent start date."
+            )
+        else:
+            st.error(f"Data fetch failed: {e}")
+        return None
     except Exception as e:
         st.error(f"Data fetch failed: {e}")
         return None

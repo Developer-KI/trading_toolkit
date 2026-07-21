@@ -2,14 +2,15 @@
 strategy/built_in.py — Built-in strategy implementations.
 
 Single-asset:
-  SingleAssetStrategy — convenience base for single-symbol strategies
-  CompositeStrategy   — combine multiple SingleAssetStrategy instances with
-                        weighted voting (registered as "composite")
+  SingleAssetStrategy        — convenience base for single-symbol strategies
+  CompositeStrategy          — combine multiple SingleAssetStrategy instances with
+                               weighted voting (registered as "composite")
+  TrendFollowingStrategy     — EMA crossover + ADX filter (registered as "trend_following")
 
 Multi-asset:
-  PerAssetStrategy    — run a different SingleAssetStrategy per symbol
-  ZPairsSpreadStrategy, CrossAssetMomentumStrategy,
-  MeanReversionBasketStrategy — pure Strategy subclasses
+  PerAssetStrategy               — run a different SingleAssetStrategy per symbol
+  MeanReversionBasketStrategy    — z-score mean reversion with RSI filter
+  CrossSectionalMomentumStrategy — rank assets by N-bar return, long top / short bottom
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ import numpy as np
 import pandas as pd
 
 from core.models import Side, Allocation, OrderBookSnapshot
-from strategy.indicators import ema, rsi, atr
+from strategy.indicators import ema, rsi, atr, adx
 
 from .base import (
     Strategy,
@@ -318,4 +319,164 @@ class MeanReversionBasketStrategy(Strategy):
     def generate_all(self, universe):
         return self._batch_generate(universe)
 
+
+# ── Trend Following (single-asset) ──────────────────────────────────────────
+@register_strategy("trend_following")
+class TrendFollowingStrategy(SingleAssetStrategy):
+    """
+    EMA crossover with ADX trend-strength filter.
+
+    Entry:
+      - LONG  when fast EMA > slow EMA and ADX > adx_threshold
+      - SHORT when fast EMA < slow EMA and ADX > adx_threshold
+    No position when ADX is below threshold (ranging/choppy market).
+    Confidence scales linearly with ADX strength above the threshold.
+    """
+
+    def __init__(
+        self,
+        symbol: str,
+        fast: int = 20,
+        slow: int = 50,
+        adx_period: int = 14,
+        adx_threshold: float = 25.0,
+        atr_period: int = 14,
+        **kw,
+    ):
+        super().__init__(symbol=symbol, **kw)
+        self.fast = fast
+        self.slow = slow
+        self.adx_period = adx_period
+        self.adx_threshold = adx_threshold
+        self.atr_period = atr_period
+
+    @property
+    def params(self) -> dict:
+        return {
+            "fast": self.fast,
+            "slow": self.slow,
+            "adx_period": self.adx_period,
+            "adx_threshold": self.adx_threshold,
+            "atr_period": self.atr_period,
+        }
+
+    def setup_data(self, data: pd.DataFrame, _l2=None):
+        close = data["close"]
+        data["_ema_fast"] = ema(close, self.fast)
+        data["_ema_slow"] = ema(close, self.slow)
+        data["_atr"]      = atr(data["high"], data["low"], close, self.atr_period)
+        data["_adx"]      = adx(data["high"], data["low"], close, self.adx_period)
+
+    def bar(self, data: pd.DataFrame, idx: int) -> Allocation:
+        if idx < self.slow:
+            return Allocation(reason="warmup")
+
+        ef      = data["_ema_fast"].iat[idx]
+        es      = data["_ema_slow"].iat[idx]
+        adx_val = data["_adx"].iat[idx]
+
+        if np.isnan(ef) or np.isnan(es) or np.isnan(adx_val):
+            return Allocation(reason="nan")
+
+        if adx_val < self.adx_threshold:
+            return Allocation(reason=f"ADX={adx_val:.1f} below threshold (no trend)")
+
+        # confidence grows as ADX moves away from the threshold; cap at 1.0
+        confidence = min((adx_val - self.adx_threshold) / 50.0, 1.0)
+
+        if ef > es:
+            return Allocation(
+                side=Side.LONG,
+                weight=confidence,
+                confidence=confidence,
+                reason=f"Trend long EMA{self.fast}>{self.slow} ADX={adx_val:.1f}",
+            )
+        return Allocation(
+            side=Side.SHORT,
+            weight=confidence,
+            confidence=confidence,
+            reason=f"Trend short EMA{self.fast}<{self.slow} ADX={adx_val:.1f}",
+        )
+
+
+# ── Cross-Sectional Momentum (multi-asset) ───────────────────────────────────
+@register_strategy("cross_sectional_momentum")
+class CrossSectionalMomentumStrategy(Strategy):
+    """
+    Rank all assets by N-bar return each bar.
+    Go long the top ``long_frac`` and short the bottom ``short_frac``.
+
+    Weight within each leg is equal; total long + short exposure is capped at
+    ``max_total_weight`` (split evenly between the two legs).
+    """
+
+    def __init__(
+        self,
+        lookback: int = 60,
+        long_frac: float = 0.3,
+        short_frac: float = 0.3,
+        max_total_weight: float = 1.0,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.lookback = lookback
+        self.long_frac = long_frac
+        self.short_frac = short_frac
+        self.max_total_weight = max_total_weight
+        self._momentum: dict[str, pd.Series] = {}
+
+    @property
+    def params(self) -> dict:
+        return {
+            "lookback": self.lookback,
+            "long_frac": self.long_frac,
+            "short_frac": self.short_frac,
+        }
+
+    def setup(self, universe: Universe):
+        for sym in universe.symbols:
+            self._momentum[sym] = universe.close(sym).pct_change(self.lookback)
+
+    def generate(self, ctx: StrategyContext) -> PortfolioTarget:
+        target = PortfolioTarget(timestamp=ctx.timestamp)
+        i = ctx.bar_idx
+
+        scores: dict[str, float] = {}
+        for sym, mom in self._momentum.items():
+            if i < len(mom):
+                val = mom.iat[i]
+                if not np.isnan(val):
+                    scores[sym] = val
+
+        if not scores:
+            return target
+
+        ranked = sorted(scores, key=scores.__getitem__)
+        n = len(ranked)
+        n_long  = max(1, round(n * self.long_frac))
+        n_short = max(1, round(n * self.short_frac))
+        longs  = ranked[-n_long:]
+        shorts = ranked[:n_short]
+
+        w_long  = self.max_total_weight / 2 / n_long
+        w_short = self.max_total_weight / 2 / n_short
+
+        for sym in longs:
+            target[sym] = Allocation(
+                side=Side.LONG,
+                weight=w_long,
+                confidence=min(abs(scores[sym]), 1.0),
+                reason=f"XSMom top mom={scores[sym]:.2%}",
+            )
+        for sym in shorts:
+            target[sym] = Allocation(
+                side=Side.SHORT,
+                weight=w_short,
+                confidence=min(abs(scores[sym]), 1.0),
+                reason=f"XSMom bot mom={scores[sym]:.2%}",
+            )
+        return target
+
+    def generate_all(self, universe):
+        return self._batch_generate(universe)
 

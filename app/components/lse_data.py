@@ -58,7 +58,13 @@ def fetch_ohlcv(
         )
 
     client = LSE(api_key=key)
-    rows = client.candles(symbol, timeframe, start=start, end=end)
+    try:
+        rows = client.candles(symbol, timeframe, start=start, end=end)
+    except Exception as exc:
+        msg = str(exc)
+        if "no candle data" in msg.lower():
+            raise ValueError(f"NO_CANDLE_DATA:{symbol}") from exc
+        raise
 
     df = pd.DataFrame(rows)
     if df.empty:
@@ -89,8 +95,45 @@ def load_bars_cached(
         df = fetch_ohlcv(symbol, timeframe, start, end, api_key)
         st.session_state[cache_key] = df
         return df
+    except ValueError as e:
+        msg = str(e)
+        if msg.startswith("NO_CANDLE_DATA:"):
+            sym = msg.split(":", 1)[1]
+            st.warning(
+                f"**{sym}** has no candlestick data on LSE. "
+                "Select a different symbol from the catalog."
+            )
+        elif "No data returned" in msg:
+            st.warning(
+                f"{msg} The requested start date may be before available history. "
+                "Try a more recent start date."
+            )
+        else:
+            st.error(f"Data fetch failed: {e}")
+        return None
     except Exception as e:
         st.error(f"Data fetch failed: {e}")
+        return None
+
+
+def fetch_catalog(api_key: str = "") -> list[dict] | None:
+    """
+    Fetch the full LSE instrument catalog.
+
+    Returns a list of dicts: {symbol, name, category, dataset, ticks, first, last, country}.
+    Returns None when credentials are missing or the call fails.
+    """
+    try:
+        from lse import LSE
+    except ImportError:
+        return None
+    key = get_api_key(api_key)
+    if not key:
+        return None
+    try:
+        client = LSE(api_key=key)
+        return client.catalog()
+    except Exception:
         return None
 
 

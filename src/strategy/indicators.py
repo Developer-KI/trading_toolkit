@@ -68,6 +68,38 @@ def book_imbalance(bids: list, asks: list, levels: int = 5) -> float:
     return (bid_vol - ask_vol) / total
 
 
+def adx(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
+    """Average Directional Index (Wilder smoothing)."""
+    prev_high  = high.shift(1)
+    prev_low   = low.shift(1)
+    prev_close = close.shift(1)
+
+    up_move   = high - prev_high
+    down_move = prev_low - low
+
+    plus_dm  = pd.Series(
+        np.where((up_move > down_move) & (up_move > 0), up_move, 0.0),
+        index=high.index,
+    )
+    minus_dm = pd.Series(
+        np.where((down_move > up_move) & (down_move > 0), down_move, 0.0),
+        index=high.index,
+    )
+
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low  - prev_close).abs(),
+    ], axis=1).max(axis=1)
+
+    atr_s    = tr.ewm(span=period, adjust=False).mean()
+    plus_di  = 100 * plus_dm.ewm(span=period, adjust=False).mean() / atr_s
+    minus_di = 100 * minus_dm.ewm(span=period, adjust=False).mean() / atr_s
+
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+    return dx.ewm(span=period, adjust=False).mean()
+
+
 def compute_atr_column(data: pd.DataFrame, period: int = 14,
                        col_name: str = "atr") -> pd.DataFrame:
     """Add an ATR column to a DataFrame in-place and return it."""
