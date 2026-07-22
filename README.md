@@ -32,11 +32,11 @@ A modular, multi-asset, multi-exchange Python framework for developing, backtest
 ## Quick Start
 
 ```bash
-# Python 3.10+
-pip install pandas pyarrow numpy streamlit plotly websockets scipy python-dotenv
+# Python 3.10+ — installs the package and every dependency from pyproject.toml
+pip install -e .
 
 # Launch the strategy explorer dashboard
-streamlit run app/Strategy_Explorer.py
+streamlit run app/Explorer.py
 
 # Run the full backtest demo (single-asset + multi-asset + multi-exchange + hypothesis tests)
 python trading/backtest_demo.py
@@ -114,8 +114,9 @@ src/
     └── auxiliary/macro/         # Macro / on-chain data helpers
 
 app/
-├── Strategy_Explorer.py         # Streamlit dashboard (EDA + backtester + hypothesis + stress)
-└── components/                  # Chart builders, sidebar forms, data fetching, engine runner
+├── Explorer.py                  # Streamlit dashboard: Market · Result · Sweep
+│                                #   · Regime · Simulation · Hypothesis Tests
+└── components/                  # Chart builders, UI kit, forms, options tab, data fetching
 
 trading/
 ├── backtest_demo.py             # End-to-end demo: single/multi-asset, TTV workflow, tests

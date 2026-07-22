@@ -4,34 +4,33 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "toolkit"
-version = "0.1.0"
-# This tells pip to look for your code
+version = "1.0"
 dependencies = [
-    "streamlit",
-    "pandas",
-    "polars",
-    "python-dotenv",
+    # Core data / numerics
     "numpy",
+    "pandas",
     "pyarrow",
-    "matplotlib",
+    "scipy",                      # derivatives.py, hypothesis tests, returns stats
+    "statsmodels",                # Ljung-Box + ADF in testing/hypothesis/tests.py
+
+    # Dashboard
+    "streamlit",
     "plotly",
-    "seaborn",
-    "playwright",
-    "beautifulsoup4",
-    "lxml",
+    "matplotlib",                 # save-to-file plots in backtester/stress helpers
+
+    # Market data
+    "lse-data",                   # the app's only price/option-chain provider
+    "python-dotenv",
     "requests",
-    "transformers",
-    "torch",
-    "tqdm",
-    "telethon",
-    "pycld2",
-    "orjson",
-    "hyperliquid-python-sdk",
-    "websockets",
-    "binance-futures-connector",
+    "aiohttp",                    # data/auxiliary/macro/crypto.py
+    "orjson",                     # feed decoding
+    "websocket-client",           # data/feeds/*
+
+    # Exchanges / execution
     "alpaca-py",
-    "websocket-client",
-    "aiohttp",
+    "binance-futures-connector",
+    "hyperliquid-python-sdk",
+    "eth-account",                # signing in execution/hyperliquid
 ]
 [tool.setuptools]
 # Map the root import path to the 'src' directory

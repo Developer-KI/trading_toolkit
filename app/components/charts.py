@@ -730,8 +730,10 @@ def term_structure_chart(surface, height: int = 300) -> go.Figure:
         line=dict(color=_BLUE, width=1.5),
     ))
     fig.update_layout(
+        # _MARGIN_MAIN, not _MARGIN_MINI: the mini margin leaves 10px of headroom,
+        # which clips this chart's title.
         template=_DARK, title="ATM Term Structure", height=height,
-        hovermode="x unified", margin=_MARGIN_MINI, showlegend=False,
+        hovermode="x unified", margin=_MARGIN_MAIN, showlegend=False,
         xaxis_title="Time to Expiry (years)", yaxis_title="Implied Vol (%)",
     )
     fig.update_xaxes(**_GRID)
@@ -740,19 +742,30 @@ def term_structure_chart(surface, height: int = 300) -> go.Figure:
 
 
 def iv_surface_chart(surface, n: int = 40, height: int = 560) -> go.Figure:
-    """3-D IV surface over the (strike/moneyness, time) grid."""
+    """
+    3-D IV surface over the (strike/moneyness, time) grid.
+
+    Aspect and camera are set explicitly so the cube fills the frame — the plotly
+    default leaves a band of empty space above it and clips the axis labels below.
+    """
     X, Y, Z = surface.grid(n=n)
     fig = go.Figure(go.Surface(
         x=X, y=Y, z=Z * 100.0, colorscale="Viridis",
-        colorbar=dict(title="IV %"),
+        colorbar=dict(title=dict(text="IV %", font=dict(size=11)),
+                      thickness=10, len=0.7, x=0.96),
+        hovertemplate=(f"{surface.x_label} %{{x:.3f}}<br>T %{{y:.3f}}y"
+                       "<br>IV %{z:.1f}%<extra></extra>"),
     ))
     fig.update_layout(
-        template=_DARK, title="Implied Volatility Surface", height=height,
-        margin=dict(l=0, r=0, t=40, b=0),
+        template=_DARK, height=height, margin=dict(l=0, r=0, t=30, b=0),
+        title=dict(text="Implied Volatility Surface", y=0.97),
         scene=dict(
             xaxis_title=surface.x_label,
             yaxis_title="T (years)",
             zaxis_title="IV (%)",
+            aspectmode="manual", aspectratio=dict(x=1.3, y=1.3, z=0.85),
+            camera=dict(eye=dict(x=1.35, y=1.35, z=1.05),
+                        center=dict(x=0, y=0, z=-0.18)),
         ),
     )
     return fig

@@ -1,8 +1,8 @@
 """
-Strategy Explorer & Backtester — unified EDA and backtest dashboard.
+Strategy Explorer & Backtester — unified EDA, options and backtest dashboard.
 
 Launch from project root:
-    streamlit run app/Strategy_Explorer.py
+    streamlit run app/Explorer.py
 """
 
 import inspect
@@ -21,7 +21,7 @@ import pandas as pd
 import streamlit as st
 
 from components.lse_data import TIMEFRAMES, BACKTEST_TIMEFRAMES, build_universe, get_api_key, load_bars_cached, fetch_catalog
-from components import ui
+from components import options_tab, ui
 from components.charts import (
     atr_chart, bollinger_traces, bootstrap_ci_chart, candlestick_chart,
     equity_chart, macd_chart, mc_distribution_chart, mc_fan_chart,
@@ -55,6 +55,12 @@ if not api_key:
 
 def _to_naive(dti: pd.DatetimeIndex) -> pd.DatetimeIndex:
     return dti.tz_convert("UTC").tz_localize(None) if dti.tz is not None else dti
+
+
+# The Market tab's asset picker owns this key. The sidebar renders before the tab
+# body, so it reads the selection from session state — Streamlit reruns the whole
+# script on a change, and by then the new value is already stored.
+_VIEW_ASSET_KEY = "market_asset"
 
 
 def _parse_value_spec(raw: str, cast, max_values: int = 500) -> list:
@@ -131,7 +137,14 @@ def _sb(text: str) -> None:
 
 
 with st.sidebar:
+    # ── Config ────────────────────────────────────────────────────────────
+    # Capital and risk sit at the top: they frame every number the rest of the
+    # app reports, so they are read before anything is selected or loaded.
+    _sb("Config")
+    config = backtest_config_form(st.sidebar, key_prefix="cfg")
+
     # ── Symbol ────────────────────────────────────────────────────────────
+    st.divider()
     _sb("Symbol")
 
     _CAT_KEY = "_lse_catalog"
@@ -260,6 +273,17 @@ with st.sidebar:
     if _loaded_syms:
         st.caption(f"Loaded: {' · '.join(_loaded_syms)}")
 
+    # ── Chain ─────────────────────────────────────────────────────────────
+    # Sits under Universe because its underlying comes from the loaded assets —
+    # specifically whichever one the Market tab has selected. The state it returns
+    # drives the option-chain section of that tab.
+    st.divider()
+    _sb("Chain")
+    _chain_state = options_tab.sidebar_controls(
+        st.session_state.get(_VIEW_ASSET_KEY) or (_loaded_syms[0] if _loaded_syms else None),
+        api_key,
+    )
+
     # ── Indicators (only when data is loaded) ─────────────────────────────
     if df_loaded is not None:
         st.divider()
@@ -301,10 +325,6 @@ with st.sidebar:
             vol_window = int(st.number_input("Vol window", value=20, step=1, min_value=5, key="vw"))
 
     # ── Strategy ──────────────────────────────────────────────────────────
-    st.divider()
-    _sb("Config")
-    config = backtest_config_form(st.sidebar, key_prefix="cfg")
-
     st.divider()
     _sb("Signal")
     signal_cls, sig_params = signal_form(st.sidebar, key_prefix="sig")
@@ -414,42 +434,49 @@ if run_bt:
                 st.error(f"Backtest failed: {e}")
                 st.exception(e)
 
-# ── Guard: nothing loaded yet ─────────────────────────────────────────────────
-
 df: pd.DataFrame | None = st.session_state.get("main_ohlcv")
 main_symbol:    str = st.session_state.get("main_symbol", symbol)
 main_timeframe: str = st.session_state.get("main_timeframe", timeframe)
-
-if df is None:
-    st.info("Enter a symbol and date range in the sidebar, then click **Load Data**.")
-    st.stop()
-
 result = st.session_state.get("main_bt_result")
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
-(tab_explorer, tab_results,
- tab_sweep, tab_mc, tab_regime, tab_hypothesis) = st.tabs([
-    "Explorer", "Results", "Sweep", "Monte Carlo", "Regime Test", "Hypothesis Tests",
+(tab_market, tab_result, tab_sweep,
+ tab_regime, tab_mc, tab_hypothesis) = st.tabs([
+    "Market", "Result", "Sweep", "Regime", "Simulation", "Hypothesis Tests",
 ])
 
-# ══════════════════════════════════════════════════════════════════ Explorer tab
+# ── Guard: no bars loaded yet ─────────────────────────────────────────────────
+# Fill every tab with the same empty state, then stop — nothing below this point
+# works without price history (the option chain now takes its underlying from the
+# loaded universe too).
 
-with tab_explorer:
+if df is None:
+    for _tab in (tab_market, tab_result, tab_sweep, tab_regime, tab_mc, tab_hypothesis):
+        with _tab:
+            ui.empty_state(
+                "Enter a symbol and date range in the sidebar, then click **Load Data**."
+            )
+    st.stop()
+
+# ════════════════════════════════════════════════════════════════════ Market tab
+
+with tab_market:
     _exp_uni_syms  = st.session_state.get("universe_symbols", [main_symbol])
     _exp_uni_ohlcv = st.session_state.get("universe_ohlcv", {main_symbol: df})
 
-    ui.intro("Inspect the price series and indicators the strategy will trade on.")
+    ui.intro(
+        "Price, indicators and the live option surface for one asset — the spot view "
+        "and the vol view describe the same instrument."
+    )
 
     with ui.panel():
-        if len(_exp_uni_syms) > 1:
-            vc0, vc1, vc2 = st.columns([2, 2, 2])
-            _view_sym = vc0.selectbox("Asset", _exp_uni_syms, index=0, key="exp_asset_pick")
-            _view_df = _exp_uni_ohlcv.get(_view_sym, df)
-        else:
-            vc1, vc2 = st.columns(2)
-            _view_sym = main_symbol
-            _view_df  = df
+        # Always rendered, even for a single-asset universe: this widget is the one
+        # asset selector for the tab, and the sidebar chain controls read its value
+        # from session state to decide which underlying to fetch.
+        vc0, vc1, vc2 = st.columns([2, 2, 2])
+        _view_sym = vc0.selectbox("Asset", _exp_uni_syms, index=0, key=_VIEW_ASSET_KEY)
+        _view_df = _exp_uni_ohlcv.get(_view_sym, df)
 
         idx_naive = _to_naive(_view_df.index)
         min_date = idx_naive.min().date()
@@ -458,8 +485,6 @@ with tab_explorer:
                                     max_value=max_date, key="vs")
         view_end   = vc2.date_input("View to", value=max_date, min_value=min_date,
                                     max_value=max_date, key="ve")
-        if len(_exp_uni_syms) > 1:
-            st.caption(f"Universe ({len(_exp_uni_syms)} assets): {' · '.join(_exp_uni_syms)}")
 
     mask = (
         (idx_naive >= pd.Timestamp(view_start)) &
@@ -485,7 +510,6 @@ with tab_explorer:
         {"label": "Buy & hold", "value": f"{_tot_ret:,.2f}%",
          "help": "What the asset itself did over this window — the bar any strategy "
                  "has to clear."},
-        {"label": "Range", "value": f"{min_date} → {max_date}"},
     ])
 
     from strategy.indicators import ema, sma, bollinger, rsi as _rsi, atr as _atr
@@ -504,20 +528,9 @@ with tab_explorer:
         for trace in bollinger_traces(mid, upper, lower):
             fig.add_trace(trace)
 
-    if result is not None:
-        trades_ov = result.trades_df()
-        # For multi-asset results, filter to the symbol being viewed
-        if not trades_ov.empty and "meta_symbol" in trades_ov.columns:
-            trades_ov = trades_ov[trades_ov["meta_symbol"] == _view_sym]
-        if not trades_ov.empty and "timestamp" in trades_ov.columns:
-            ts = pd.to_datetime(trades_ov["timestamp"])
-            ts_naive = ts.dt.tz_convert("UTC").dt.tz_localize(None) if ts.dt.tz is not None else ts
-            v_mask = (
-                (ts_naive >= pd.Timestamp(view_start)) &
-                (ts_naive < pd.Timestamp(view_end) + pd.Timedelta(days=1))
-            )
-            fig = trade_markers(fig, trades_ov[v_mask])
-
+    # No trade markers here, deliberately: Market stays a view of the instrument
+    # itself, unchanged by whether a backtest has been run. Trades on price live on
+    # the Result tab.
     ui.section("Price")
     st.plotly_chart(fig, use_container_width=True)
     st.plotly_chart(volume_bars(df_view), use_container_width=True)
@@ -547,6 +560,12 @@ with tab_explorer:
         st.plotly_chart(vol_regime_chart(rv, q_lo, q_hi, vol_window),
                         use_container_width=True)
 
+    # ── Option chain for the same asset ───────────────────────────────────
+    st.divider()
+    _chain_built = options_tab.render_section(_chain_state, api_key)
+
+    # ── Tables and downloads, last ────────────────────────────────────────
+    ui.section("Data")
     with st.expander("Returns analysis"):
         from scipy import stats as sp_stats
 
@@ -574,7 +593,7 @@ with tab_explorer:
                 ],
             }))
 
-    with st.expander("Raw OHLCV data"):
+    with st.expander(f"Raw OHLCV — {len(df_view):,} bars"):
         st.dataframe(
             df_view.style.format({c: "{:,.4f}" for c in ["open", "high", "low", "close"]}),
             use_container_width=True,
@@ -585,11 +604,12 @@ with tab_explorer:
             file_name=f"{_view_sym}_{main_timeframe}.csv", mime="text/csv",
         )
 
-    st.caption(f"{len(df_view):,} bars  ·  {df_view.index[0]}  →  {df_view.index[-1]}")
+    if _chain_built:
+        options_tab.chain_table_expander(_chain_built)
 
-# ═══════════════════════════════════════════════════════════════════ Results tab
+# ════════════════════════════════════════════════════════════════════ Result tab
 
-with tab_results:
+with tab_result:
     if result is None:
         ui.empty_state("Configure a signal in the sidebar and click **Run Backtest**.")
     else:
@@ -775,7 +795,7 @@ _TEST_LABELS = {
 
 with tab_hypothesis:
     if result is None:
-        ui.empty_state("Run a backtest first (Results tab).")
+        ui.empty_state("Run a backtest first (Result tab).")
     else:
         ui.intro(
             "Ask whether this result is distinguishable from luck. Every test reports a "
@@ -839,10 +859,13 @@ with tab_hypothesis:
 
             # ── Test battery as verdict cards ────────────────────────────
             st.markdown("**Test battery**")
-            _cols = st.columns(min(len(tests), 3) or 1)
-            for i, t in enumerate(tests):
-                with _cols[i % len(_cols)]:
-                    with st.container(border=True):
+            # Two per row: a fresh st.columns per pair, so each row's cards share a
+            # baseline instead of one long interpretation stretching every card in a
+            # single 3-wide row. Four tests lay out as a 2x2 grid.
+            for _row_start in range(0, len(tests), 2):
+                _cols = st.columns(2)
+                for _col, t in zip(_cols, tests[_row_start:_row_start + 2]):
+                    with _col, st.container(border=True):
                         _name = _TEST_LABELS.get(t.name, t.name.replace("_", " "))
                         _mark = "✅" if t.reject_null else "•"
                         st.markdown(f"{_mark} **{_name}**")
@@ -1063,7 +1086,7 @@ with tab_sweep:
             st.dataframe(_sdf[_show_cols].sort_values(_p1, ignore_index=True),
                          use_container_width=True)
 
-# ══════════════════════════════════════════════════════════════ Regime Test tab
+# ═══════════════════════════════════════════════════════════════════ Regime tab
 
 # Trend leads and is therefore the default: bull/bear is the split most strategies
 # are actually exposed to, and it is the one a directional edge most often fails.
@@ -1075,7 +1098,7 @@ _REGIME_MODES = {
 
 with tab_regime:
     if result is None:
-        ui.empty_state("Run a backtest first (Results tab).")
+        ui.empty_state("Run a backtest first (Result tab).")
     elif signal_cls is None:
         ui.empty_state("Select a signal in the sidebar first.")
     else:
@@ -1202,7 +1225,7 @@ with tab_regime:
         with st.expander("Regime summary table"):
             st.dataframe(_rdf, use_container_width=True)
 
-# ══════════════════════════════════════════════════════════════ Monte Carlo tab
+# ═══════════════════════════════════════════════════════════════ Simulation tab
 
 _MC_METHODS = {
     "bootstrap": ("Bootstrap", "Resample trades with replacement — tests luck of the draw."),
@@ -1212,11 +1235,11 @@ _MC_METHODS = {
 
 with tab_mc:
     if result is None:
-        ui.empty_state("Run a backtest first (Results tab).")
+        ui.empty_state("Run a backtest first (Result tab).")
     else:
         trades_df_mc = result.trades_df()
         if trades_df_mc.empty or "pnl" not in trades_df_mc.columns:
-            st.warning("No trades with PnL data available for Monte Carlo simulation.")
+            st.warning("No trades with PnL data available to simulate.")
         else:
             ui.intro(
                 f"Resample the {len(trades_df_mc)} realised trades to ask how much of this "
@@ -1232,7 +1255,7 @@ with tab_mc:
                                           min_value=100, max_value=10000, key="mc_n")
                 mc_seed = mc3.number_input("Seed", value=42, step=1, key="mc_seed")
                 st.caption(_MC_METHODS[mc_method][1])
-                run_mc_clicked = ui.run_button("Run Monte Carlo", "run_mc")
+                run_mc_clicked = ui.run_button("Run Simulation", "run_mc")
 
             if run_mc_clicked:
                 try:
@@ -1243,7 +1266,7 @@ with tab_mc:
                         ).run(result)
                     st.session_state["main_mc_result"] = mc_new
                 except Exception as e:
-                    st.error(f"Monte Carlo failed: {e}")
+                    st.error(f"Simulation failed: {e}")
                     st.exception(e)
 
     mc_result = st.session_state.get("main_mc_result")
