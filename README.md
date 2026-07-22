@@ -22,7 +22,8 @@ A modular, multi-asset, multi-exchange Python framework for developing, backtest
    - [Step 6 — Hypothesis Testing & Validation](#step-6--hypothesis-testing--validation)
    - [Step 7 — Stress Testing](#step-7--stress-testing)
    - [Step 8 — Live Trading](#step-8--live-trading)
-5. [Extending the Framework](#extending-the-framework)
+5. [Options & Derivatives](#options--derivatives)
+6. [Extending the Framework](#extending-the-framework)
    - [Adding a New Exchange](#adding-a-new-exchange)
    - [Custom Data Sources](#custom-data-sources)
    - [Custom Sizers, Stops, and Cost Models](#custom-sizers-stops-and-cost-models)
@@ -45,24 +46,20 @@ python trading/backtest_demo.py
 python trading/alpaca_livetest_demo.py --symbol SPY
 ```
 
-Create a `.env` file in the project root:
+Create a `.env` file in the project root. These three keys are the only ones read from
+the environment:
 
 ```env
-# Hyperliquid
-HL_ACCOUNT_ADDRESS=0x...
-HL_SECRET_KEY=0x...
-
-# Alpaca paper trading
-ALP_PAPER_KEY=your_key
-ALP_PAPER_SECRET=your_secret
-
-# Alpaca live trading
-ALP_LIVE_KEY=your_key
-ALP_LIVE_SECRET=your_secret
-
 # London Strategic Edge historical data (dashboard + backtest demos)
 LSE_DATA=your_key
+
+# Alpaca paper trading (dashboard + alpaca_livetest_demo.py)
+ALP_PAPER_KEY=your_key
+ALP_PAPER_SECRET=your_secret
 ```
+
+Hyperliquid and Binance credentials are **not** read from `.env` — they are passed
+programmatically via `ExchangeCredentials` (see [Step 8](#step-8--live-trading)).
 
 ---
 
@@ -77,7 +74,9 @@ src/
 │   ├── events.py                # BarEvent, TradeEvent, L2Event structs
 │   ├── universe.py              # Universe — holds OHLCV + L2 + funding per symbol
 │   ├── feeds.py                 # BaseFeed, BaseBarBuilder base classes
-│   └── parser.py                # trades_to_ohlcv, l2_to_orderbook, funding helpers
+│   ├── parser.py                # trades_to_ohlcv, l2_to_orderbook, funding helpers
+│   └── derivatives.py           # OptionChain, Black-Scholes / binomial, IV, Greeks,
+│                                # Heston calibration, IVSurface
 │
 ├── strategy/                    # Pure-Python strategy framework
 │   ├── base.py                  # Strategy, StrategyContext, PortfolioTarget, registries
@@ -106,17 +105,21 @@ src/
 │   ├── factory.py               # Registry-based executor + feed factory
 │   ├── state.py                 # LiveState, _AssetLiveState, _ManualKillSwitch
 │   ├── alpaca/                  # Alpaca executor (paper + live)
-│   ├── binance/                 # Binance USD-M executor + WebSocket feed
-│   └── hyperliquid/             # Hyperliquid executor + WebSocket feed
+│   ├── binance/                 # Binance USD-M executor
+│   └── hyperliquid/             # Hyperliquid executor
 │
 └── data/
     ├── feeds/                   # Live WebSocket feeds (Hyperliquid, Binance, Alpaca)
-    └── auxiliary/macro/         # Macro / on-chain data helpers
+    ├── historical/lse_parse.py  # LSE REST client: fetch_ohlcv/fetch_multi, catalog,
+    │                            # build_universe
+    └── auxiliary/macro/         # Macro / on-chain pollers (open interest, stablecoins,
+                                 # Deribit vol)
 
 app/
 ├── Explorer.py                  # Streamlit dashboard: Market · Result · Sweep
 │                                #   · Regime · Simulation · Hypothesis Tests
-└── components/                  # Chart builders, UI kit, forms, options tab, data fetching
+└── components/                  # charts.py, ui.py, style.py, forms.py, options_tab.py,
+                                 # lse_data.py, alpaca_data.py, engine_runner.py
 
 trading/
 ├── backtest_demo.py             # End-to-end demo: single/multi-asset, TTV workflow, tests
@@ -183,14 +186,37 @@ execution/   Live engine, exchange adapters, WebSocket feeds
 
 ### Step 1 — Load Data
 
-Load raw OHLCV from any source and build a `Universe`. For backtest demos the project uses LSE (London Strategic Edge); for live it's exchange WebSocket feeds.
+Load OHLCV from any source and build a `Universe`. There are two paths: the LSE
+(London Strategic Edge) REST client — what the dashboard and `backtest_demo.py`
+actually use — and the local-archive parsers in `core/parser.py` for parquet tick /
+L2 / funding dumps.
+
+**LSE (primary path):**
+
+```python
+from data.historical.lse_parse import fetch_ohlcv, fetch_multi, build_universe
+
+# Single symbol — the API key resolves from LSE_DATA in .env
+aapl = fetch_ohlcv("AAPL", timeframe="1d", start="2015-01-01", end="2025-12-31")
+# → DataFrame(DatetimeIndex UTC, columns=[open, high, low, close, volume])
+
+# Several symbols at once
+basket = fetch_multi(["AAPL", "MSFT", "NVDA"], timeframe="1d", start="2015-01-01")
+
+universe = build_universe(basket)            # dict[symbol, DataFrame]
+universe = build_universe(aapl, symbol="AAPL")   # single DataFrame
+```
+
+Browse what's available with `fetch_catalog()` / `filter_catalog(catalog, category=…,
+dataset=…, country=…)` — the same catalog the Explorer's asset picker reads.
+
+**Local parquet archives (tick / L2 / funding):**
 
 ```python
 from core.parser import trades_to_ohlcv, l2_to_orderbook, funding_to_snapshots, align_funding_to_ohlcv
 
-# Resample raw tick trades into any bar size
+# Resample raw tick trades into any bar size (folder of parquet files)
 eth_1h = trades_to_ohlcv("data/trades/HYPERLIQUID_PERPETUALS/ETH", timeframe="1h")
-# → DataFrame(DatetimeIndex, columns=[open, high, low, close, volume])
 
 # Load L2 snapshots aligned 1:1 with OHLCV bars
 l2_snaps = l2_to_orderbook("data/l2/HYPERLIQUID_PERPETUALS/ETH", ohlcv_data=eth_1h)
@@ -324,8 +350,11 @@ def generate(self, ctx: StrategyContext) -> PortfolioTarget:
 | `weight` | `float` | Position size fraction 0–1 (scaled by sizer) |
 | `confidence` | `float` | Optional signal confidence 0–1 |
 | `reason` | `str` | Debug / signal log string |
+| `order_type` | `str` | `"market"` (default) or `"limit"` |
+| `limit_price` | `float \| None` | Price for limit orders |
 | `stop_loss` | `float \| None` | Absolute stop price |
 | `take_profit` | `float \| None` | Absolute take-profit price |
+| `meta` | `dict` | Free-form payload carried through to logs |
 
 **`StrategyContext` fields:**
 
@@ -341,16 +370,20 @@ def generate(self, ctx: StrategyContext) -> PortfolioTarget:
 | `timestamp` | Current bar timestamp |
 | `trade_history` | List of closed `Trade` objects |
 
-Key methods: `ctx.price(sym)`, `ctx.ohlcv(sym)`, `ctx.l2(sym)`, `ctx.funding(sym)`, `ctx.is_positioned(sym)`, `ctx.net_exposure()` — all accept an optional `exchange=` keyword.
+Key methods: `ctx.price(sym)`, `ctx.prices()`, `ctx.ohlcv(sym)`, `ctx.l2(sym)`, `ctx.funding(sym)`, `ctx.aux(source_name)`, `ctx.is_positioned(sym)`, `ctx.net_exposure()`, `ctx.net_exposure_pct()` — all accept an optional `exchange=` keyword. `ctx.position_on(exchange, sym)` reads one exchange's position directly.
 
 **`PortfolioTarget` interface:**
 
 ```python
-target["ETH"]                   # single-exchange allocation
-target[("nyse", "AAPL")]        # multi-exchange allocation
+target["ETH"]                    # single-exchange allocation
+target[("nyse", "AAPL")]         # multi-exchange allocation
 target.is_multi_exchange         # True when exchange_allocations is populated
 target.for_exchange("nyse")      # dict[str, Allocation] for one exchange
 target.exchanges                 # list of exchange names present
+target.active_symbols()          # non-FLAT symbols (optional exchange= filter)
+target.active_legs()             # [(exchange, symbol, Allocation)] — multi-exchange
+target.symbols_on("nyse")        # non-FLAT symbols on one exchange
+target.total_weight              # sum of absolute weights
 target.normalize(max_total=1.0)  # scale weights down proportionally
 ```
 
@@ -364,8 +397,10 @@ target.normalize(max_total=1.0)  # scale weights down proportionally
 | `atr` | `(high, low, close, period=14)` |
 | `bollinger` | `(series, window=20, num_std=2.0) → (mid, upper, lower)` |
 | `vwap_rolling` | `(price, volume, window)` |
+| `adx` | `(high, low, close, period=14)` |
 | `order_flow_imbalance` | `(bid_vol, ask_vol, window=20)` |
-| `book_imbalance` | `(l2_snapshot)` |
+| `book_imbalance` | `(bids, asks, levels=5) → float` — operates on one L2 snapshot's level lists |
+| `compute_atr_column` | `(data, period=14)` — writes an `atr` column in-place (what `ATRStop` reads) |
 
 **Built-in strategies** (`from strategy.built_in import ...`):
 
@@ -374,9 +409,11 @@ target.normalize(max_total=1.0)  # scale weights down proportionally
 | `SingleAssetStrategy` | Base for single-symbol strategies — implement `bar()` |
 | `CompositeStrategy` | Combines multiple strategies with weights and a vote threshold |
 | `PerAssetStrategy` | Runs one `SingleAssetStrategy` instance per symbol in the universe |
-| `ZPairsSpreadStrategy` | Z-score pairs trading (registered as `"pairs_z_spread"`) |
-| `CrossAssetMomentumStrategy` | Long top N / short bottom N by return (registered as `"cross_asset_momentum"`) |
 | `MeanReversionBasketStrategy` | Z-score + RSI mean reversion (registered as `"mean_reversion_basket"`) |
+| `TrendFollowingStrategy` | Single-asset trend follower (registered as `"trend_following"`) |
+| `CrossSectionalMomentumStrategy` | Long top N / short bottom N by return (registered as `"cross_sectional_momentum"`) |
+
+Registered names resolve through `get_strategy(name)`; `list_strategies()` enumerates them.
 
 **Portfolio overlays** (`from strategy.overlay import ...`):
 
@@ -414,7 +451,7 @@ bt = Backtester(
 
 result = bt.run(universe=universe, timeframe="1h")
 print(result.summary())
-result.save("ema_rsi_eth_1h")   # → backtest_runs/ema_rsi_eth_1h/
+result.save("ema_rsi_eth_1h")   # → logs/test/ema_rsi_eth_1h/<UTC timestamp>/
 ```
 
 #### Multi-exchange backtest
@@ -454,10 +491,13 @@ result.save("cross_exchange_demo")
 | `.trades_by_symbol(sym)` | Per-symbol trade filter (multi-asset runs) |
 | `.plot_equity()` | Equity curve + drawdown chart |
 | `.to_csv(path)` | Export trades to CSV |
-| `.save(run_name)` | Write `log.json`, `trades.csv`, `equity_curve.png` to `backtest_runs/<run_name>/` |
+| `.save(run_name)` | Write `log.json`, `trades.csv`, `equity_curve.png` (plus `equity_curves_by_exchange.csv` when multi-exchange) to `logs/test/<run_name>/<UTC timestamp>/`; returns the directory path |
 | `.positions_log` / `.allocation_log` | Per-bar, per-asset logs (multi-asset only) |
+| `.meta` / `.run_time_s` | Run metadata and wall-clock duration |
 
-**Vectorised fast path** — activates automatically (10–50×) when using `NopStopLoss()` and `FixedNotionalSizer`. Single-exchange only.
+`Backtester.run()` also accepts the legacy single-asset form `bt.run(data=df, l2=snapshots)`, which wraps the DataFrame in a one-symbol `Universe` internally. Pass exactly one of `data=`, `universe=`, or `universes=`.
+
+**Vectorised fast path** — activates automatically when every stop is `NopStopLoss()` and every sizer reports `vectorizable` (currently only `FixedNotionalSizer`). Single-exchange only.
 
 ---
 
@@ -550,6 +590,11 @@ wfa = WalkForwardAnalysis(
 )
 wf = wfa.run(universe=ttv.train, timeframe="1h", n_splits=5, split_method="expanding")
 print(f"Consistency: {wf.consistency_score:.0%}  IS/OOS efficiency: {wf.efficiency_ratio:.2f}")
+
+# Stronger variant: re-optimise parameters inside each fold, apply them OOS.
+# This tests whether parameter *selection* generalises, not just one fixed set.
+wf = wfa.run(universe=ttv.train, timeframe="1h", n_splits=5,
+             optimize=True, param_grid={"fast": [10, 20, 50], "slow": [100, 200]})
 ```
 
 **Phase 2 — Test:** Optimise parameters. Track the number of trials for DSR correction.
@@ -586,7 +631,12 @@ cis = BootstrapCI(n_bootstrap=2_000, ci=0.95).run(val_result)
 # Deflated Sharpe — corrects for the number of param combos tried
 dsr = DeflatedSharpeRatio().compute(val_result, n_trials=n_trials)
 print(f"DSR: {dsr.deflated_sharpe:.3f}  {'Genuine edge' if dsr.reject_null else 'Likely overfit'}")
+
+# Or infer n_trials straight from a sweep result:
+dsr = DeflatedSharpeRatio().from_sweep(sweep)
 ```
+
+`BootstrapCI.run()` returns `dict[metric, {...}]` and defaults to total return, Sharpe (when ≥ 10 trades), and max drawdown. Win rate is excluded by design — pass `metrics=["win_rate_pct"]` if you want it. `PermutationTest` supports `sharpe_ratio`, `total_return_pct`, and `profit_factor`, and returns a single `TestResult`.
 
 **Hypothesis tools reference:**
 
@@ -623,20 +673,19 @@ sweep = ParamSweep(
 )
 res = sweep.run(universe=universe, timeframe="1h")
 res.plot_heatmap("fast", "slow", z="sharpe_ratio")
+print(res.best("sharpe_ratio"), res.worst("sharpe_ratio"))
 
-# Cost stress test — find where alpha breaks down under higher fees
-from testing.backtester.stress import CostStressTest
-cst = CostStressTest(cost_grid={
-    "ExchangeFeeCost": {"taker_bps": [3, 5, 8, 12]},
-    "SpreadCost":      {"default_spread_bps": [1, 2, 4, 8]},
-})
-cst.run(strategy=my_strategy, universe=universe)
-
-# Regime stress test — performance across vol / trend / volume regimes
+# Regime stress test — performance across vol / trend / volume regimes.
+# regime_fn defaults to a volatility classifier; trend_regime and volume_regime
+# are provided as static alternatives, or pass your own DataFrame → Series.
 rst = RegimeStressTest(regime_fn=RegimeStressTest.trend_regime, config=config, cost_model=cost)
-regime_summary = rst.run(strategy=my_strategy, universe=universe)
-print(regime_summary.summary)
+regime_result = rst.run(strategy=my_strategy, universe=universe)
+print(regime_result.summary)   # DataFrame — one row per regime
 ```
+
+All three return a `StressResult` with `.summary` (DataFrame, one row per scenario), `.results` (per-scenario `BacktestResult`s), `.meta`, plus `.best()`, `.worst()`, `.to_csv()`, and `.plot_heatmap()`. `ParamSweep` and `RegimeStressTest` parallelise across cores by default (`n_jobs=-1`).
+
+To stress costs, re-run the sweep with different `cost_model` stacks — there is no dedicated cost-stress class.
 
 ---
 
@@ -646,9 +695,11 @@ The `Engine` handles three modes from a single class:
 
 | Mode | Constructor argument |
 |---|---|
-| Single exchange | `strategy=my_strategy` |
+| Single exchange | `strategy=my_strategy` (requires exactly one entry in `config.exchanges`) |
 | Independent strategy per exchange | `per_exchange_strategies={"binance": s1, "hyperliquid": s2}` |
 | Cross-exchange strategy (funding arb, stat arb) | `cross_strategy=my_strategy` |
+
+Exactly one of the three must be provided.
 
 **Alpaca (US equities / ETFs, paper and live):**
 
@@ -661,9 +712,10 @@ from strategy.stops import NopStopLoss
 config = LiveConfig(
     exchanges=[ExchangeCredentials(
         exchange="alpaca",
-        api_key="ALP_PAPER_KEY",
-        api_secret="ALP_PAPER_SECRET",
-        testnet=True,
+        # Leave blank to fall back to ALP_PAPER_KEY / ALP_PAPER_SECRET in .env
+        api_key="",
+        api_secret="",
+        testnet=True,       # testnet=True → Alpaca paper account
     )],
     symbol="SPY",
     bar_interval_s=60,
@@ -749,11 +801,58 @@ engine.start()
 
 ---
 
+## Options & Derivatives
+
+`core/derivatives.py` is a self-contained option-pricing layer, surfaced in the Explorer's
+Market tab. It has no dependency on the backtester or the live engine.
+
+```python
+from core.derivatives import (
+    OptionChain, OptionType,
+    black_scholes_price, binomial_price,
+    implied_vol, implied_vol_chain,
+    greeks, greeks_chain,
+    HestonParams, heston_price, calibrate_heston,
+    IVSurface,
+)
+
+# Build a chain from provider rows (LSE `client.options()` output, field-name tolerant)
+chain = OptionChain.from_records(rows, underlying="SPY").drop_expired()
+chain.expiries, chain.strikes, chain.spot
+chain.for_expiry("2026-09-18")
+
+# Pricing — European (Black-Scholes) or American (binomial, 200 steps by default)
+black_scholes_price(S=500, K=510, T=0.25, r=0.04, sigma=0.2, option_type="call")
+binomial_price(S=500, K=510, T=0.25, r=0.04, sigma=0.2, option_type="put", american=True)
+
+# Implied vol — bracketed solve, model="bs" or "binomial" for American
+implied_vol(price=12.5, S=500, K=510, T=0.25, r=0.04, option_type="call")
+iv_df = implied_vol_chain(chain, r=0.04)
+
+# Greeks — analytic under BS, finite-difference under the binomial model
+g = greeks(S=500, K=510, T=0.25, r=0.04, sigma=0.2, option_type="call")
+g.as_dict()          # delta, gamma, vega, theta, rho
+
+# Stochastic vol — least-squares Heston calibration against the chain
+params = calibrate_heston(chain, r=0.04)
+params.feller         # 2κθ − ξ² ; negative means the variance process can hit zero
+
+# IV surface — smile, term structure, skew, interpolation, meshgrid
+surf = IVSurface.from_chain(chain, r=0.04, model="bs", moneyness=True)
+surf.smile("2026-09-18")
+surf.term_structure()
+surf.atm_vol("2026-09-18")
+surf.skew("2026-09-18", lo=0.9, hi=1.1)
+surf.interpolate(x=1.02, T=0.25)
+```
+
+---
+
 ## Extending the Framework
 
 ### Adding a New Exchange
 
-Implement `BaseExecutor` and register it in `factory.py`:
+Implement `BaseExecutor` and add it to the registry in `factory.py`:
 
 ```python
 # execution/myexchange/myexchange_executor.py
@@ -774,22 +873,37 @@ class MyExchangeExecutor(BaseExecutor):
     def limit_order(self, symbol, side, size, price, reduce_only=False) -> FillResult: ...
     def cancel_all(self, symbol) -> int: ...
     def close_position(self, symbol) -> FillResult: ...
+
+    # Optional — base class provides safe defaults:
+    #   close_all_positions() → 0, set_leverage() → no-op,
+    #   fetch_funding_rate() → None, fetch_historical_candles() → NotImplementedError
     def set_leverage(self, symbol, leverage, cross=True): ...
     def fetch_historical_candles(self, symbol, interval, start_ms, end_ms) -> list[dict]: ...
     def fetch_funding_rate(self, symbol) -> FundingSnapshot | None: ...
 ```
 
+Note that `fetch_historical_candles` is optional on the ABC but required in practice — the live engine calls it to warm up the rolling `Universe`.
+
 The same contract is also expressed as `ExecutorProtocol` in `core/protocols.py` — a pybind11-wrapped C++ class satisfies it structurally without any Python base class.
 
-Register in `execution/factory.py`:
+`execution/factory.py` keeps registry dicts rather than an if/elif chain. Add an entry to `EXECUTOR_REGISTRY` and `FEED_REGISTRY`:
 
 ```python
-elif name == "myexchange":
+def _make_myexchange_executor(cred: ExchangeCredentials) -> BaseExecutor:
     from .myexchange.myexchange_executor import MyExchangeExecutor
-    return MyExchangeExecutor(...)
+    return MyExchangeExecutor(api_key=cred.api_key, api_secret=cred.api_secret)
+
+EXECUTOR_REGISTRY["myexchange"] = _make_myexchange_executor
 ```
 
-Similarly for `BaseFeed`: implement `start(on_trade, on_candle, on_l2)`, `stop()`, and the `latest_l2` property, then register in the feed registry.
+Or register from outside the package at runtime:
+
+```python
+from execution.factory import register_exchange
+register_exchange("myexchange", _make_myexchange_executor, _make_myexchange_feed)
+```
+
+Similarly for `BaseFeed`: implement `start(on_trade, on_candle, on_l2)`, `stop()`, and the `latest_l2` property. Feed modules live in `data/feeds/`; the factory in `execution/` only wires them up.
 
 ### Custom Data Sources
 
