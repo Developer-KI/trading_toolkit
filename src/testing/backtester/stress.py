@@ -404,22 +404,29 @@ class MonteCarloStress:
         initial = bt_result.config.initial_capital
         rows = []
 
+        # Equity paths feed the percentile fan chart. Percentiles are stable well
+        # before 10k paths, so cap collection to bound memory on large runs.
+        _MAX_PATH_SIMS = 2_000
+        paths: list[np.ndarray] = []
+
+        n_obs = len(trade_pnls)
+        # Circular moving-block bootstrap: blocks start anywhere and wrap around, so
+        # every block is exactly `block_size` long. The previous version cut blocks on
+        # a fixed grid, which left a short tail block — drawing it repeatedly produced
+        # runs with fewer trades than the original, making returns across simulations
+        # incomparable (and the equity paths ragged).
+        block_size = max(5, n_obs // 10)
+        n_blocks = int(np.ceil(n_obs / block_size))
+
         for i in range(self.n_simulations):
-            if self.method == "bootstrap":
-                sampled = rng.choice(trade_pnls, size=len(trade_pnls), replace=True)
-            elif self.method == "shuffle":
+            if self.method == "shuffle":
                 sampled = rng.permutation(trade_pnls)
             elif self.method == "block_bootstrap":
-                block_size = max(5, len(trade_pnls) // 10)
-                n_blocks = len(trade_pnls) // block_size + 1
-                blocks = [
-                    trade_pnls[j : j + block_size]
-                    for j in range(0, len(trade_pnls), block_size)
-                ]
-                chosen = [blocks[rng.integers(len(blocks))] for _ in range(n_blocks)]
-                sampled = np.concatenate(chosen)[: len(trade_pnls)]
-            else:
-                sampled = rng.choice(trade_pnls, size=len(trade_pnls), replace=True)
+                starts = rng.integers(0, n_obs, size=n_blocks)
+                idx = (starts[:, None] + np.arange(block_size)) % n_obs
+                sampled = trade_pnls[idx.ravel()[:n_obs]]
+            else:  # "bootstrap" and any unknown method
+                sampled = rng.choice(trade_pnls, size=n_obs, replace=True)
 
             cum_pnl = np.cumsum(sampled)
             equity = initial + cum_pnl
@@ -427,6 +434,9 @@ class MonteCarloStress:
             peak = np.maximum.accumulate(equity)
             dd = (equity - peak) / peak
             max_dd = dd.min()
+
+            if len(paths) < _MAX_PATH_SIMS:
+                paths.append(equity)
 
             rows.append(
                 {
@@ -439,17 +449,32 @@ class MonteCarloStress:
             )
 
         summary = pd.DataFrame(rows)
-        return StressResult(
-            name="monte_carlo",
-            summary=summary,
-            meta={
-                "median_return": summary["total_return_pct"].median(),
-                "5th_pctl_return": summary["total_return_pct"].quantile(0.05),
-                "95th_pctl_return": summary["total_return_pct"].quantile(0.95),
-                "median_max_dd": summary["max_drawdown_pct"].median(),
-                "5th_pctl_max_dd": summary["max_drawdown_pct"].quantile(0.05),
-            },
-        )
+
+        # Observed (actual trade order) path, for anchoring the simulated cloud.
+        observed_equity = initial + np.cumsum(trade_pnls)
+        obs_peak = np.maximum.accumulate(observed_equity)
+
+        meta = {
+            "median_return": summary["total_return_pct"].median(),
+            "5th_pctl_return": summary["total_return_pct"].quantile(0.05),
+            "95th_pctl_return": summary["total_return_pct"].quantile(0.95),
+            "median_max_dd": summary["max_drawdown_pct"].median(),
+            "5th_pctl_max_dd": summary["max_drawdown_pct"].quantile(0.05),
+            "prob_profit": float((summary["total_return_pct"] > 0).mean()),
+            "initial_capital": float(initial),
+            "observed_return_pct": float((observed_equity[-1] / initial - 1) * 100),
+            "observed_max_dd_pct": float(
+                ((observed_equity - obs_peak) / obs_peak).min() * 100
+            ),
+            "observed_equity": observed_equity,
+        }
+        if paths:
+            stacked = np.vstack(paths)
+            qs = np.percentile(stacked, [5, 25, 50, 75, 95], axis=0)
+            meta["equity_bands"] = dict(zip(("p5", "p25", "median", "p75", "p95"), qs))
+            meta["n_paths"] = len(paths)
+
+        return StressResult(name="monte_carlo", summary=summary, meta=meta)
 
     def plot_distribution(
         self,

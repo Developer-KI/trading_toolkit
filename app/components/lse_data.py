@@ -116,6 +116,99 @@ def load_bars_cached(
         return None
 
 
+def fetch_option_chain(
+    underlying: str,
+    expiry: str | None = None,
+    option_type: str | None = None,
+    min_dte: int | None = None,
+    max_dte: int | None = None,
+    api_key: str = "",
+):
+    """
+    Fetch the current option chain for an underlying from the LSE API.
+
+    Returns a `core.derivatives.OptionChain`. Raises on missing credentials or when
+    the provider returns no contracts. The raw rows (price, provider IV/greeks, OSI ticker)
+    are preserved in each contract's `meta`, so our own reconstruction can be sanity-checked
+    against the provider's values.
+    """
+    from core.derivatives import OptionChain
+
+    try:
+        from lse import LSE
+    except ImportError as exc:
+        raise ImportError(
+            "Missing dependency: lse-data. Install with: pip install 'lse-data[frames]'"
+        ) from exc
+
+    key = get_api_key(api_key)
+    if not key:
+        raise ValueError(
+            "LSE API key not set. Add LSE_DATA=your_key to .env or enter it in the sidebar."
+        )
+
+    client = LSE(api_key=key)
+    rows = client.options(
+        underlying,
+        type=option_type,
+        expiry=expiry,
+        min_dte=min_dte,
+        max_dte=max_dte,
+    )
+    if not rows:
+        raise ValueError(f"NO_OPTION_DATA:{underlying}")
+
+    return OptionChain.from_records(rows, underlying=underlying, asof=pd.Timestamp.utcnow())
+
+
+def load_chain_cached(
+    underlying: str,
+    expiry: str | None = None,
+    min_dte: int | None = None,
+    max_dte: int | None = None,
+    api_key: str = "",
+):
+    """Session-state cached wrapper around fetch_option_chain. Returns None on error."""
+    cache_key = f"_chain_{underlying}_{expiry}_{min_dte}_{max_dte}"
+    if cache_key in st.session_state:
+        return st.session_state[cache_key]
+    try:
+        chain = fetch_option_chain(
+            underlying, expiry=expiry, min_dte=min_dte, max_dte=max_dte, api_key=api_key
+        )
+        st.session_state[cache_key] = chain
+        return chain
+    except ValueError as e:
+        msg = str(e)
+        if msg.startswith("NO_OPTION_DATA:"):
+            sym = msg.split(":", 1)[1]
+            st.warning(
+                f"**{sym}** has no listed options on LSE, or the market is closed. "
+                "Pick another underlying or upload a chain file below."
+            )
+        else:
+            st.error(f"Option chain fetch failed: {e}")
+        return None
+    except Exception as e:
+        st.error(f"Option chain fetch failed: {e}")
+        return None
+
+
+def fetch_option_underlyings(api_key: str = "") -> list[dict] | None:
+    """Every underlying with listed options: [{'symbol', 'name'}, ...] or None on failure."""
+    try:
+        from lse import LSE
+    except ImportError:
+        return None
+    key = get_api_key(api_key)
+    if not key:
+        return None
+    try:
+        return LSE(api_key=key).options_underlyings()
+    except Exception:
+        return None
+
+
 def fetch_catalog(api_key: str = "") -> list[dict] | None:
     """
     Fetch the full LSE instrument catalog.
@@ -137,9 +230,20 @@ def fetch_catalog(api_key: str = "") -> list[dict] | None:
         return None
 
 
-def build_universe(symbol: str, df: pd.DataFrame):
-    """Wrap an OHLCV DataFrame in a Universe for backtester consumption."""
+def build_universe(symbols, ohlcv_data):
+    """
+    Wrap OHLCV data in a Universe for backtester consumption.
+
+    Single asset:  build_universe("AAPL", df)
+    Multi-asset:   build_universe(["AAPL", "MSFT"], {"AAPL": df1, "MSFT": df2})
+    """
     from core.universe import Universe
-    uni = Universe(symbols=[symbol])
-    uni.add_asset(symbol, df)
+    if isinstance(symbols, str):
+        uni = Universe(symbols=[symbols])
+        uni.add_asset(symbols, ohlcv_data)
+        return uni
+    syms = list(symbols)
+    uni = Universe(symbols=syms)
+    for sym in syms:
+        uni.add_asset(sym, ohlcv_data[sym])
     return uni

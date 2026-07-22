@@ -86,21 +86,19 @@ def sizer_form(container, key_prefix: str = "sizer"):
         VolatilityTargetSizer, KellySizer, CompositeSizer,
     )
 
-    OPTIONS = ["Fixed Fractional", "Fixed Notional", "Volatility Target", "Kelly", "Vol + Kelly"]
+    # Fixed Notional leads and is the default: it is the only vectorizable sizer, so it is
+    # the one that can pair with a "None" stop to take the backtester's fast path.
+    OPTIONS = ["Fixed Notional (vectorized)", "Fixed Fractional", "Volatility Target",
+               "Kelly", "Vol + Kelly"]
     choice = container.radio("Sizer", OPTIONS, key=f"{key_prefix}_choice")
 
-    if choice == "Fixed Fractional":
+    if choice.startswith("Fixed Notional"):
+        pct = _num(container, "Equity %", 0.10, f"{key_prefix}_ep", step=0.01, min_val=0.01, max_val=1.0)
+        return FixedNotionalSizer(equity_pct=pct)
+
+    elif choice == "Fixed Fractional":
         rf = _num(container, "Risk fraction", 0.02, f"{key_prefix}_rf", step=0.005, min_val=0.001, max_val=0.5)
         return FixedFractionalSizer(risk_frac=rf)
-
-    elif choice == "Fixed Notional":
-        use_fixed = container.checkbox("Fixed $ notional (not equity %)", value=False, key=f"{key_prefix}_use_notional")
-        if use_fixed:
-            notional = _num(container, "Notional ($)", 1000.0, f"{key_prefix}_notional", step=100.0, min_val=10.0)
-            return FixedNotionalSizer(notional=notional)
-        else:
-            pct = _num(container, "Equity %", 0.10, f"{key_prefix}_ep", step=0.01, min_val=0.01, max_val=1.0)
-            return FixedNotionalSizer(equity_pct=pct)
 
     elif choice == "Volatility Target":
         tv = _num(container, "Target annual vol", 0.15, f"{key_prefix}_tv", step=0.01, min_val=0.01)
@@ -128,11 +126,24 @@ def stop_form(container, key_prefix: str = "stop"):
     """
     Stop-loss selector + param fields.
     Returns an instantiated StopLoss.
-    """
-    from strategy.stops import FixedPercentStop, ATRStop, TrailingStop, RiskRewardStop
 
-    OPTIONS = ["Fixed Percent", "ATR", "Trailing", "Risk/Reward"]
+    "None" yields a `NopStopLoss`, which satisfies one of the two conditions the
+    backtester needs to take its vectorised fast path (the sizer must also be
+    vectorizable). Exits then happen solely on signal flips.
+    """
+    from strategy.stops import (
+        ATRStop, FixedPercentStop, NopStopLoss, RiskRewardStop, TrailingStop,
+    )
+
+    OPTIONS = ["None (vectorized)", "Fixed Percent", "ATR", "Trailing", "Risk/Reward"]
     choice = container.radio("Stop loss", OPTIONS, key=f"{key_prefix}_choice")
+
+    if choice.startswith("None"):
+        container.caption(
+            "No stop — positions exit on signal flips only. Enables the vectorised "
+            "fast path when the sizer is vectorizable too."
+        )
+        return NopStopLoss()
 
     if choice == "Fixed Percent":
         sl = _num(container, "SL %", 2.0, f"{key_prefix}_sl", step=0.1, min_val=0.1)

@@ -413,11 +413,14 @@ class HypothesisTests:
         Run the standard battery of tests.
 
         Skips any test that raises (e.g. not enough data, missing statsmodels).
+        `win_rate` is deliberately not in the battery: hit rate says nothing about
+        profitability on its own (a 30%-win trend follower can beat a 70%-win mean
+        reverter), so testing it against 50% invites the wrong conclusion. Call
+        `HypothesisTests.win_rate()` directly if you specifically want it.
         """
         candidates = [
             lambda r: HypothesisTests.sharpe_significance(r, alpha=alpha),
             lambda r: HypothesisTests.mean_return(r, alpha=alpha),
-            lambda r: HypothesisTests.win_rate(r, alpha=alpha),
             lambda r: HypothesisTests.normality(r, alpha=alpha),
             lambda r: HypothesisTests.stationarity(r, alpha=alpha),
         ]
@@ -585,7 +588,10 @@ class BootstrapCI:
         n_trades = len(pnl)
         # SR requires enough unique trade outcomes for meaningful std estimation.
         _MIN_TRADES_SR = 10
-        default_metrics = ["total_return_pct", "max_drawdown_pct", "win_rate_pct"]
+        # Win rate is deliberately absent: hit rate is not evidence of profitability,
+        # so an interval on it invites the wrong read. Pass metrics=["win_rate_pct"]
+        # explicitly if you want it.
+        default_metrics = ["total_return_pct", "max_drawdown_pct"]
         if n_trades >= _MIN_TRADES_SR:
             default_metrics.insert(1, "sharpe_ratio")
         target = metrics or default_metrics

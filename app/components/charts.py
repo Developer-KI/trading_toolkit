@@ -1,6 +1,7 @@
 """Reusable Plotly chart builders for the trading dashboard."""
 from __future__ import annotations
 
+import math
 from typing import Callable
 
 import pandas as pd
@@ -693,4 +694,483 @@ def plot_features(
     )
     fig.update_xaxes(**_GRID)
     fig.update_yaxes(**_GRID)
+    return fig
+
+
+# ── Options / IV surface charts ───────────────────────────────────────────────
+
+def iv_smile_chart(surface, expiries=None, height: int = 420) -> go.Figure:
+    """Implied-vol smile: IV vs strike/moneyness, one line per expiry."""
+    expiries = expiries if expiries is not None else surface.expiries
+    fig = go.Figure()
+    for i, exp in enumerate(expiries):
+        x, iv = surface.smile(exp)
+        if len(x) == 0:
+            continue
+        label = pd.Timestamp(exp).strftime("%Y-%m-%d")
+        fig.add_trace(go.Scatter(
+            x=x, y=iv * 100.0, name=label, mode="lines+markers",
+            line=dict(color=_OVERLAY_COLORS[i % len(_OVERLAY_COLORS)], width=1.5),
+        ))
+    fig.update_layout(
+        template=_DARK, title="IV Smile", height=height,
+        hovermode="x unified", margin=_MARGIN_MAIN, legend=_LEGEND_H,
+        xaxis_title=surface.x_label, yaxis_title="Implied Vol (%)",
+    )
+    fig.update_xaxes(**_GRID)
+    fig.update_yaxes(**_GRID)
+    return fig
+
+
+def term_structure_chart(surface, height: int = 300) -> go.Figure:
+    """ATM implied vol vs time-to-expiry (years)."""
+    Ts, ivs = surface.term_structure()
+    fig = go.Figure(go.Scatter(
+        x=Ts, y=ivs * 100.0, mode="lines+markers", name="ATM IV",
+        line=dict(color=_BLUE, width=1.5),
+    ))
+    fig.update_layout(
+        template=_DARK, title="ATM Term Structure", height=height,
+        hovermode="x unified", margin=_MARGIN_MINI, showlegend=False,
+        xaxis_title="Time to Expiry (years)", yaxis_title="Implied Vol (%)",
+    )
+    fig.update_xaxes(**_GRID)
+    fig.update_yaxes(**_GRID)
+    return fig
+
+
+def iv_surface_chart(surface, n: int = 40, height: int = 560) -> go.Figure:
+    """3-D IV surface over the (strike/moneyness, time) grid."""
+    X, Y, Z = surface.grid(n=n)
+    fig = go.Figure(go.Surface(
+        x=X, y=Y, z=Z * 100.0, colorscale="Viridis",
+        colorbar=dict(title="IV %"),
+    ))
+    fig.update_layout(
+        template=_DARK, title="Implied Volatility Surface", height=height,
+        margin=dict(l=0, r=0, t=40, b=0),
+        scene=dict(
+            xaxis_title=surface.x_label,
+            yaxis_title="T (years)",
+            zaxis_title="IV (%)",
+        ),
+    )
+    return fig
+
+
+def greeks_chart(greeks_df: pd.DataFrame, expiry=None, height: int = 420) -> go.Figure:
+    """Delta / gamma / vega across strikes for one expiry (stacked subplots)."""
+    df = greeks_df.copy()
+    if expiry is not None:
+        df = df[df["expiry"] == pd.Timestamp(expiry)]
+    df = df.sort_values("strike")
+
+    fig = sp.make_subplots(
+        rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
+        subplot_titles=("Delta", "Gamma", "Vega"),
+    )
+    for otype, color in (("call", _GREEN), ("put", _RED)):
+        sub = df[df["option_type"] == otype]
+        if sub.empty:
+            continue
+        common = dict(x=sub["strike"], mode="lines+markers",
+                      line=dict(color=color, width=1.5), legendgroup=otype)
+        fig.add_trace(go.Scatter(y=sub["delta"], name=f"{otype} Δ", **common), row=1, col=1)
+        fig.add_trace(go.Scatter(y=sub["gamma"], name=f"{otype} Γ", showlegend=False,
+                                 **{k: v for k, v in common.items() if k != "name"}), row=2, col=1)
+        fig.add_trace(go.Scatter(y=sub["vega"], name=f"{otype} ν", showlegend=False,
+                                 **{k: v for k, v in common.items() if k != "name"}), row=3, col=1)
+    fig.update_layout(
+        template=_DARK, height=height, hovermode="x unified",
+        margin=_MARGIN_MAIN, legend=_LEGEND_H,
+    )
+    fig.update_xaxes(title_text="Strike", row=3, col=1, **_GRID)
+    for r in (1, 2, 3):
+        fig.update_yaxes(row=r, col=1, **_GRID)
+    return fig
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Validation charts — Monte Carlo, regime stress, hypothesis tests
+#
+# Palette discipline for this block: blue is the single data hue (sequential when
+# it encodes uncertainty), green/red are *status* colours reserved for sign and
+# verdict and always ship alongside a label, and reference marks (observed value,
+# null band) wear neutral ink so they never read as a third series. The trio
+# #2196F3 / #26a69a / #ef5350 clears the CVD, normal-vision and contrast checks
+# on this dark surface across all pairs.
+# ══════════════════════════════════════════════════════════════════════════════
+
+_INK = "#e6e9f0"        # primary reference ink (observed values)
+_INK_MUTED = "#8b93a7"  # secondary ink (null bands, percentile rules)
+
+# Metrics whose sign is fixed by construction — status colour would be noise.
+_SIGNLESS_METRICS = {"max_drawdown_pct", "win_rate_pct"}
+
+
+def _signed(value: float) -> str:
+    """Status colour for a signed quantity — always paired with a visible label."""
+    return _GREEN if value >= 0 else _RED
+
+
+def mc_fan_chart(bands: dict, observed=None, initial: float | None = None,
+                 height: int = 380) -> go.Figure:
+    """
+    Percentile fan of simulated equity paths, with the observed path on top.
+
+    `bands` maps p5/p25/median/p75/p95 to equity arrays. The nested ribbons are one
+    hue at increasing opacity: a sequential encoding of likelihood, not four series.
+    """
+    fig = go.Figure()
+    x = list(range(len(bands["median"])))
+
+    for lo, hi, alpha, label in (("p5", "p95", 0.10, "5-95%"),
+                                 ("p25", "p75", 0.22, "25-75%")):
+        fig.add_trace(go.Scatter(
+            x=x + x[::-1],
+            y=list(bands[hi]) + list(bands[lo])[::-1],
+            fill="toself", fillcolor=f"rgba(33,150,243,{alpha})",
+            line=dict(width=0), name=label, hoverinfo="skip",
+        ))
+    fig.add_trace(go.Scatter(
+        x=x, y=bands["median"], name="Median path",
+        line=dict(color=_BLUE, width=2),
+        hovertemplate="Trade %{x}<br>Median $%{y:,.0f}<extra></extra>",
+    ))
+    if observed is not None:
+        fig.add_trace(go.Scatter(
+            x=list(range(len(observed))), y=list(observed), name="Observed",
+            line=dict(color=_INK, width=2, dash="dot"),
+            hovertemplate="Trade %{x}<br>Observed $%{y:,.0f}<extra></extra>",
+        ))
+    if initial is not None:
+        fig.add_hline(y=initial, line_dash="dash", line_color=_INK_MUTED, line_width=1,
+                      annotation_text="Start", annotation_position="bottom right",
+                      annotation_font_color=_INK_MUTED)
+
+    fig.update_layout(
+        template=_DARK, height=height, hovermode="x unified",
+        margin=_MARGIN_MAIN, legend=_LEGEND_H,
+        title="Simulated equity paths",
+    )
+    fig.update_xaxes(title_text="Trade #", **_GRID)
+    fig.update_yaxes(title_text="Equity ($)", **_GRID)
+    return fig
+
+
+def mc_distribution_chart(values, observed: float | None = None, title: str = "",
+                          unit: str = "%", height: int = 300) -> go.Figure:
+    """
+    Outcome histogram with the 5th/median/95th rules and the observed run marked.
+
+    One series, so no legend: the title names it and the reference lines are
+    directly labelled.
+    """
+    vals = pd.Series(values).dropna()
+    fig = go.Figure()
+    fig.add_trace(go.Histogram(
+        x=vals, nbinsx=60, marker_color=_BLUE, opacity=0.75,
+        marker_line_width=0, name="Simulations",
+        hovertemplate="%{x:.2f}" + unit + "<br>%{y} sims<extra></extra>",
+    ))
+
+    p5, med, p95 = vals.quantile(0.05), vals.median(), vals.quantile(0.95)
+    # Opaque label backgrounds: the observed run often lands right on the median,
+    # and overlapping annotations must stay legible when it does.
+    _bg = "rgba(17,17,17,0.82)"
+    for val, dash, color, label, pos in (
+        (p5,  "dot",  _INK_MUTED, f"5th {p5:.1f}{unit}", "top left"),
+        (med, "dash", _BLUE,      f"median {med:.1f}{unit}", "top left"),
+        (p95, "dot",  _INK_MUTED, f"95th {p95:.1f}{unit}", "top right"),
+    ):
+        fig.add_vline(x=val, line_dash=dash, line_color=color, line_width=1,
+                      annotation_text=label, annotation_position=pos,
+                      annotation_font_size=10, annotation_font_color=color,
+                      annotation_bgcolor=_bg)
+    if observed is not None and pd.notna(observed):
+        fig.add_vline(x=observed, line_color=_INK, line_width=2,
+                      annotation_text=f"observed {observed:.1f}{unit}",
+                      annotation_position="bottom right",
+                      annotation_font_size=10, annotation_font_color=_INK,
+                      annotation_bgcolor=_bg)
+
+    fig.update_layout(
+        template=_DARK, height=height, title=title, showlegend=False,
+        margin=dict(l=50, r=20, t=50, b=30), bargap=0.02,
+    )
+    fig.update_xaxes(title_text=f"{title} ({unit})" if unit else title, **_GRID)
+    fig.update_yaxes(title_text="Simulations", **_GRID)
+    return fig
+
+
+def regime_bar_chart(summary: pd.DataFrame, metric: str, label: str,
+                     height: int = 300) -> go.Figure:
+    """
+    One metric across regimes — horizontal bars, coloured by sign and value-labelled.
+
+    Regime identity lives on the axis, so colour is free to encode polarity.
+    """
+    df = summary.dropna(subset=[metric]).copy()
+    df = df.sort_values(metric)
+    vals = df[metric].astype(float)
+
+    fig = go.Figure(go.Bar(
+        x=vals, y=df["regime"].astype(str), orientation="h",
+        marker_color=[_signed(v) for v in vals],
+        text=[f"{v:,.2f}" for v in vals], textposition="outside",
+        textfont=dict(color=_INK, size=11), cliponaxis=False,
+        hovertemplate="%{y}<br>" + label + " %{x:,.3f}<extra></extra>",
+    ))
+    fig.add_vline(x=0, line_color=_INK_MUTED, line_width=1)
+    fig.update_layout(
+        template=_DARK, height=height, title=label, showlegend=False,
+        margin=dict(l=90, r=40, t=50, b=30),
+    )
+    # Pad the range so outside value labels never run into the regime names.
+    lo, hi = float(min(vals.min(), 0)), float(max(vals.max(), 0))
+    pad = (hi - lo) * 0.18 or 0.5
+    fig.update_xaxes(range=[lo - pad, hi + pad], **_GRID)  # title lives in the chart title
+    fig.update_yaxes(**_GRID)
+    return fig
+
+
+def bootstrap_ci_chart(ci: dict, height_per_row: int = 78) -> go.Figure:
+    """
+    Bootstrap confidence intervals — one small multiple per metric.
+
+    Percentages and ratios never share an axis: each metric gets its own row and
+    its own x-scale, with the observed value marked inside its interval.
+    """
+    metrics = list(ci.keys())
+    # The metric name is the row's y-axis title, not a subplot title: a title sits
+    # directly on top of the previous row's tick labels and collides with them.
+    fig = sp.make_subplots(rows=len(metrics), cols=1, shared_xaxes=False,
+                           vertical_spacing=0.16)
+
+    for i, m in enumerate(metrics, start=1):
+        v = ci[m]
+        lo, hi, obs = float(v["lower"]), float(v["upper"]), float(v["observed"])
+
+        # Pad so the endpoint labels stay inside the plot, and only draw the zero
+        # rule when zero is actually near the interval — forcing it into range would
+        # squash a win-rate interval of 36–51% into the right-hand tenth of the axis.
+        span = (hi - lo) or abs(hi) or 1.0
+        xlo, xhi = lo - span * 0.35, hi + span * 0.35
+        zero_in_view = xlo <= 0 <= xhi
+
+        # Status colour only where the sign is a real finding. Drawdown is negative
+        # by construction, so colouring it red says nothing; likewise a win rate is
+        # positive whatever the strategy does.
+        if zero_in_view and m not in _SIGNLESS_METRICS:
+            color = _GREEN if lo > 0 else (_RED if hi < 0 else _INK_MUTED)
+        else:
+            color = _INK_MUTED
+        fig.add_trace(go.Scatter(
+            x=[lo, hi], y=[0, 0], mode="lines",
+            line=dict(color=color, width=8), showlegend=False,
+            hovertemplate=m + "<br>CI %{x:,.3f}<extra></extra>",
+        ), row=i, col=1)
+        fig.add_trace(go.Scatter(
+            x=[obs], y=[0], mode="markers+text",
+            marker=dict(color=_INK, size=11, line=dict(color="#111111", width=2)),
+            text=[f"{obs:,.2f}"], textposition="top center",
+            textfont=dict(color=_INK, size=11), showlegend=False,
+            hovertemplate=m + "<br>observed %{x:,.3f}<extra></extra>",
+        ), row=i, col=1)
+        for edge, anchor in ((lo, "right"), (hi, "left")):
+            fig.add_annotation(x=edge, y=0, text=f"{edge:,.2f}", showarrow=False,
+                               xanchor=anchor, xshift=-8 if anchor == "right" else 8,
+                               font=dict(color=_INK_MUTED, size=10), row=i, col=1)
+
+        if zero_in_view:
+            fig.add_vline(x=0, line_color=_INK_MUTED, line_width=1, line_dash="dot",
+                          row=i, col=1)
+        # Row label as a horizontal annotation: a y-axis title would be rotated,
+        # and four rotated titles collide down the left edge.
+        fig.add_annotation(text=m.replace("_", " "), showarrow=False,
+                           x=xlo, y=1.1, xanchor="left", yanchor="middle",
+                           font=dict(size=11, color=_INK_MUTED), row=i, col=1)
+        fig.update_yaxes(visible=False, zeroline=False, range=[-1, 1.6], row=i, col=1)
+        fig.update_xaxes(range=[xlo, xhi], row=i, col=1, **_GRID)
+
+    fig.update_layout(
+        template=_DARK, height=height_per_row * len(metrics) + 40,
+        margin=dict(l=30, r=30, t=20, b=20), showlegend=False,
+    )
+    return fig
+
+
+def permutation_null_chart(pt, height: int = 190) -> go.Figure:
+    """
+    Where the observed statistic sits against the shuffled-order null.
+
+    Same metric on both marks, so one axis is correct: a neutral 5-95% null band
+    with the observed value marked in reference ink.
+    """
+    meta = pt.meta or {}
+    p5 = float(meta.get("null_p5", 0.0))
+    p95 = float(meta.get("null_p95", 0.0))
+    null_mean = float(meta.get("null_mean", 0.0))
+    obs = float(pt.statistic)
+
+    # Null bands can be very narrow (a shuffled Sharpe often spans <0.01), where a
+    # fixed 2-dp label prints the same number at both ends. Scale precision to span.
+    span = max(abs(p95 - p5), abs(obs - null_mean), 1e-12)
+    dec = min(6, max(2, int(math.ceil(-math.log10(span))) + 2))
+    fmt = f"{{:.{dec}f}}"
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=[p5, p95], y=[0, 0], mode="lines",
+        line=dict(color=_INK_MUTED, width=18), name="Null 5-95%",
+        hovertemplate="null %{x}<extra></extra>",
+    ))
+    # A tick across the band, not a third series — light enough to read against the
+    # muted band and to show up in the legend swatch.
+    fig.add_trace(go.Scatter(
+        x=[null_mean], y=[0], mode="markers",
+        marker=dict(color=_INK, size=16, symbol="line-ns-open",
+                    line=dict(color=_INK, width=2)),
+        name="Null mean", hovertemplate="null mean %{x}<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=[obs], y=[0], mode="markers+text",
+        marker=dict(color=_GREEN if pt.reject_null else _INK, size=14,
+                    line=dict(color="#111111", width=2)),
+        text=["observed " + fmt.format(obs)], textposition="top center",
+        textfont=dict(color=_INK, size=11), name="Observed",
+        hovertemplate="observed %{x}<extra></extra>",
+    ))
+    for edge, anchor in ((p5, "right"), (p95, "left")):
+        fig.add_annotation(x=edge, y=0, text=fmt.format(edge), showarrow=False,
+                           xanchor=anchor, xshift=-10 if anchor == "right" else 10,
+                           font=dict(color=_INK_MUTED, size=10))
+
+    lo, hi = min(p5, obs), max(p95, obs)
+    pad = (hi - lo) * 0.35 or abs(hi) * 0.1 or 1.0
+    fig.update_layout(
+        template=_DARK, height=height, margin=dict(l=30, r=30, t=44, b=26),
+        legend=_LEGEND_H, title="Observed vs shuffled-order null",
+    )
+    fig.update_xaxes(range=[lo - pad, hi + pad], **_GRID)
+    fig.update_yaxes(visible=False, range=[-1, 1.6])
+    return fig
+
+
+# ── Sequential / diverging ramps for the sweep surface ───────────────────────
+# Sequential: one hue, dark→bright, monotonic in OKLCH lightness (checked).
+# Diverging: two poles + a NEUTRAL GRAY midpoint — never a rainbow, and never a
+# hue at the middle, which is why plotly's RdYlGn (yellow midpoint) is not used.
+_SEQ_BLUE = ["#0d2438", "#144a7c", "#1a6fbb", "#2196F3", "#7cc3f7"]
+_DIV_RED_GREEN = [(0.0, "#ef5350"), (0.5, "#5b6273"), (1.0, "#26a69a")]
+
+
+def returns_hist_chart(returns: pd.Series, height: int = 300) -> go.Figure:
+    """Bar-return distribution with a zero rule. One series, so no legend."""
+    vals = (returns.dropna() * 100)
+    fig = go.Figure(go.Histogram(
+        x=vals, nbinsx=80, marker_color=_BLUE, opacity=0.75, marker_line_width=0,
+        hovertemplate="%{x:.2f}%<br>%{y} bars<extra></extra>",
+    ))
+    fig.add_vline(x=0, line_color=_INK_MUTED, line_dash="dash", line_width=1)
+    fig.update_layout(
+        template=_DARK, height=height, title="Return distribution",
+        showlegend=False, margin=dict(l=50, r=20, t=50, b=30), bargap=0.02,
+    )
+    fig.update_xaxes(title_text="Return (%)", **_GRID)
+    fig.update_yaxes(title_text="Bars", **_GRID)
+    return fig
+
+
+def vol_regime_chart(rv: pd.Series, q_lo: pd.Series, q_hi: pd.Series,
+                     window: int, height: int = 260) -> go.Figure:
+    """
+    Rolling annualised vol against its own expanding 33rd/66th percentiles.
+
+    The percentile lines are thresholds, not series — they wear muted ink so the
+    one data series keeps the only saturated colour.
+    """
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=q_hi.index, y=q_hi, name="66th pctl",
+        line=dict(color=_INK_MUTED, dash="dot", width=1),
+        hovertemplate="66th %{y:.1f}%<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=q_lo.index, y=q_lo, name="33rd pctl",
+        line=dict(color=_INK_MUTED, dash="dot", width=1),
+        hovertemplate="33rd %{y:.1f}%<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=rv.index, y=rv, name=f"Ann. vol ({window})",
+        line=dict(color=_BLUE, width=1.8),
+        hovertemplate="%{y:.1f}%<extra></extra>",
+    ))
+    fig.update_layout(
+        template=_DARK, height=height, hovermode="x unified",
+        title=f"Volatility regime — {window}-bar rolling annualised vol",
+        margin=_MARGIN_MAIN, legend=_LEGEND_H,
+    )
+    fig.update_xaxes(**_GRID)
+    fig.update_yaxes(title_text="Ann. vol (%)", **_GRID)
+    return fig
+
+
+def sweep_heatmap(pivot: pd.DataFrame, metric: str, x_name: str, y_name: str,
+                  height: int = 420) -> go.Figure:
+    """
+    Two-parameter sweep surface.
+
+    Magnitude that crosses zero is polarity — a diverging scale anchored so the
+    neutral midpoint sits exactly at zero. Otherwise it is plain magnitude and
+    gets the single-hue sequential ramp.
+    """
+    z = [[float(v) if pd.notna(v) else None for v in row] for row in pivot.values]
+    flat = [v for row in z for v in row if v is not None]
+    lo, hi = (min(flat), max(flat)) if flat else (0.0, 1.0)
+
+    if lo < 0 < hi:
+        bound = max(abs(lo), abs(hi))  # symmetric, so the gray midpoint is zero
+        scale, zmin, zmax = _DIV_RED_GREEN, -bound, bound
+    else:
+        scale, zmin, zmax = _SEQ_BLUE, lo, hi
+
+    fig = go.Figure(go.Heatmap(
+        z=z, x=[str(c) for c in pivot.columns], y=[str(r) for r in pivot.index],
+        colorscale=scale, zmin=zmin, zmax=zmax,
+        xgap=2, ygap=2,  # surface gap between cells
+        text=[[f"{v:.3f}" if v is not None else "—" for v in row] for row in z],
+        texttemplate="%{text}", textfont=dict(size=10),
+        colorbar=dict(title=dict(text=metric, font=dict(size=11)), thickness=12),
+        hovertemplate=f"{x_name} %{{x}}<br>{y_name} %{{y}}<br>{metric} %{{z:.4f}}<extra></extra>",
+    ))
+    fig.update_layout(
+        template=_DARK, height=height, title=f"{metric} — {x_name} vs {y_name}",
+        margin=dict(l=50, r=20, t=50, b=40),
+    )
+    fig.update_xaxes(title_text=x_name, type="category", **_GRID)
+    fig.update_yaxes(title_text=y_name, type="category", **_GRID)
+    return fig
+
+
+def sweep_bar_chart(x_vals, y_vals, metric: str, x_name: str,
+                    height: int = 320) -> go.Figure:
+    """One-parameter sweep — bars coloured by sign, best value direct-labelled."""
+    ys = [float(v) for v in y_vals]
+    best = max(range(len(ys)), key=lambda i: ys[i]) if ys else None
+
+    fig = go.Figure(go.Bar(
+        x=[str(v) for v in x_vals], y=ys,
+        marker_color=[_signed(v) for v in ys],
+        text=[f"{v:,.3f}" if i == best else "" for i, v in enumerate(ys)],
+        textposition="outside", textfont=dict(color=_INK, size=11), cliponaxis=False,
+        hovertemplate=f"{x_name} %{{x}}<br>{metric} %{{y:,.4f}}<extra></extra>",
+    ))
+    fig.add_hline(y=0, line_color=_INK_MUTED, line_width=1)
+    fig.update_layout(
+        template=_DARK, height=height, title=f"{metric} vs {x_name}",
+        showlegend=False, margin=dict(l=50, r=20, t=50, b=40), bargap=0.25,
+    )
+    fig.update_xaxes(title_text=x_name, type="category", **_GRID)
+    fig.update_yaxes(title_text=metric, **_GRID)
     return fig
