@@ -203,19 +203,15 @@ def render_section(state: dict, api_key: str) -> dict | None:
         {"label": "Expiries", "value": f"{len(surface.expiries)}"},
     ])
 
-    # One quality line rather than a metric tile: how many quotes inverted, and why
-    # the rest did not. Every blank IV has a reason, so none of them read as a bug.
-    _quality = f"{n_valid:,}/{n_total:,} quotes inverted to an implied vol."
+    # Quote coverage: how many quotes inverted, and why the rest did not. Every
+    # blank IV has a reason, so none of them read as a bug.
+    _coverage = f"{n_valid:,}/{n_total:,} quotes inverted to an implied vol."
     if "iv_status" in gdf.columns:
         _unsolved = gdf.loc[gdf["iv"].isna(), "iv_status"]
         if len(_unsolved):
             _reasons = ", ".join(f"{n} {why}" for why, n in _unsolved.value_counts().items())
-            _quality += f" Skipped — {_reasons} (see `iv_status` in the chain table)."
-    if surface.svi:
-        _rmse = pd.Series([p.rmse for p in surface.svi.values()]).median()
-        _quality += (f" SVI smiles fit on {len(surface.svi)}/{len(surface.expiries)} expiries "
-                     f"(median fit error {_rmse * 100:.2f} vol pts).")
-    st.caption(_quality)
+            _coverage += f" Skipped — {_reasons} (see `iv_status` in the chain table)."
+    st.caption(_coverage)
 
     # ── Surface + term structure ─────────────────────────────────────────────
     # Equal heights: with the ATM/skew tiles moved up into the headline row, the

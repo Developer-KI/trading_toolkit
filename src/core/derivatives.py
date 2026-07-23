@@ -533,12 +533,35 @@ class SVIParams:
         return {"a": self.a, "b": self.b, "rho": self.rho, "m": self.m, "sigma": self.sigma}
 
 
+def _svi_min_variance(a, b, rho, sig) -> float:
+    """Minimum of the SVI total-variance curve over all k.
+
+    w(k) bottoms out at k − m = −ρσ/√(1−ρ²), where it equals a + b·σ·√(1−ρ²). Keeping
+    this ≥ 0 is the no-arbitrage floor: it guarantees total variance — and hence the
+    implied vol √(w/T) — is real and non-negative at every strike, not just at the
+    observed ones.
+    """
+    return a + b * sig * math.sqrt(max(1.0 - rho * rho, 0.0))
+
+
 def fit_svi(k, iv, T) -> "SVIParams | None":
     """Least-squares fit of raw SVI to one expiry's (log-moneyness, IV) points.
 
     Fits in total-variance space (w = iv²·T), which is the space SVI is linear-ish and well
     conditioned in. Returns None when there are too few distinct points to identify the five
     parameters, T is non-positive, or scipy fails to converge.
+
+    Parameters are held inside their physically/financially admissible region:
+
+      • b ≥ 0                     — wings cannot slope into negative variance
+      • |ρ| < 1                   — the skew cannot be perfectly vertical
+      • σ > 0                     — the curve keeps a smooth, rounded base
+      • a + b·σ·√(1−ρ²) ≥ 0       — the curve's minimum total variance stays non-negative
+
+    The first three are box bounds on the optimiser. The fourth couples all four
+    parameters, which box bounds can't express, so it is enforced by a one-sided penalty
+    during the fit and a final projection (lifting the level `a`) that guarantees it holds
+    on the returned parameters.
     """
     k = np.asarray(k, dtype=float)
     iv = np.asarray(iv, dtype=float)
@@ -560,10 +583,18 @@ def fit_svi(k, iv, T) -> "SVIParams | None":
     p0 = [min(max(v, lo), hi) for v, lo, hi in
           zip([a0, 0.1, -0.5, m0, 0.1], lb, ub)]
 
+    # Penalty weight for the minimum-variance floor. Scaled to the data (w_max) so the
+    # constraint dominates the fit residuals whenever it is violated, regardless of the
+    # vol level of this slice.
+    min_var_pen = 1e3 * max(w_max, 1e-6)
+
     def resid(p):
         a, b, rho, m, sig = p
         model = a + b * (rho * (k - m) + np.sqrt((k - m) ** 2 + sig ** 2))
-        return model - w
+        # One-sided: zero while a + b·σ·√(1−ρ²) ≥ 0, growing as it goes negative, pushing
+        # the optimiser back onto the admissible side of the no-arbitrage floor.
+        floor = min(_svi_min_variance(a, b, rho, sig), 0.0) * min_var_pen
+        return np.append(model - w, floor)
 
     try:
         sol = _least_squares(resid, p0, bounds=(lb, ub), method="trf",
@@ -571,7 +602,14 @@ def fit_svi(k, iv, T) -> "SVIParams | None":
     except Exception:
         return None
 
-    params = SVIParams(*sol.x, T=float(T))
+    a, b, rho, m, sig = (float(v) for v in sol.x)
+    # Guarantee the floor exactly: if the minimum variance is still negative, lift the
+    # overall level a so the curve just touches zero at its base (a ← a − w_min).
+    w_min = _svi_min_variance(a, b, rho, sig)
+    if w_min < 0.0:
+        a -= w_min
+
+    params = SVIParams(a, b, rho, m, sig, T=float(T))
     params.rmse = float(np.sqrt(np.nanmean((params.iv(k) - iv) ** 2)))
     return params
 
@@ -771,7 +809,12 @@ class IVSurface:
             empty = np.zeros((n, n))
             return empty, empty, empty
         py = self.points["T"].to_numpy()
-        xi = np.linspace(px.min(), px.max(), n)
+        # Clip the log-moneyness span to the central 1st–99th percentile of observed
+        # strikes. The rectangular grid otherwise applies the widest (long-dated) strike
+        # span to the shortest maturities, where SVI extrapolation into the deep wings
+        # divided by a tiny T sends IV = √(w/T) to absurd (1000%+) corner values.
+        x_lo, x_hi = np.percentile(px, [1.0, 99.0])
+        xi = np.linspace(x_lo, x_hi, n)
         yi = np.linspace(py.min(), py.max(), n)
         X, Y = np.meshgrid(xi, yi)
         Z = np.empty_like(X)

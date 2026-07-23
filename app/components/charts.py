@@ -726,7 +726,7 @@ def iv_smile_chart(surface, expiries=None, height: int = 420) -> go.Figure:
     fig.update_layout(
         template=_DARK, title="IV Smile", height=height,
         hovermode="x unified", margin=_MARGIN_MAIN, legend=_LEGEND_H,
-        xaxis_title=surface.x_label, yaxis_title="Implied Vol (%)",
+        xaxis_title=surface.x_label, yaxis_title="Annualized IV (%)",
     )
     fig.update_xaxes(**_GRID)
     fig.update_yaxes(**_GRID)
@@ -745,7 +745,7 @@ def term_structure_chart(surface, height: int = 300) -> go.Figure:
         # which clips this chart's title.
         template=_DARK, title="ATM Term Structure", height=height,
         hovermode="x unified", margin=_MARGIN_MAIN, showlegend=False,
-        xaxis_title="Time to Expiry (years)", yaxis_title="Implied Vol (%)",
+        xaxis_title="Time to Expiry (years)", yaxis_title="Annualized IV (%)",
     )
     fig.update_xaxes(**_GRID)
     fig.update_yaxes(**_GRID)
@@ -762,10 +762,10 @@ def iv_surface_chart(surface, n: int = 40, height: int = 560) -> go.Figure:
     X, Y, Z = surface.grid(n=n)
     fig = go.Figure(go.Surface(
         x=X, y=Y, z=Z * 100.0, colorscale="Viridis",
-        colorbar=dict(title=dict(text="IV %", font=dict(size=11)),
+        colorbar=dict(title=dict(text="Ann. IV %", font=dict(size=11)),
                       thickness=10, len=0.7, x=0.96),
         hovertemplate=(f"{surface.x_label} %{{x:.3f}}<br>T %{{y:.3f}}y"
-                       "<br>IV %{z:.1f}%<extra></extra>"),
+                       "<br>Ann. IV %{z:.1f}%<extra></extra>"),
     ))
     fig.update_layout(
         template=_DARK, height=height, margin=dict(l=0, r=0, t=30, b=0),
@@ -773,7 +773,7 @@ def iv_surface_chart(surface, n: int = 40, height: int = 560) -> go.Figure:
         scene=dict(
             xaxis_title=surface.x_label,
             yaxis_title="T (years)",
-            zaxis_title="IV (%)",
+            zaxis_title="Annualized IV (%)",
             aspectmode="manual", aspectratio=dict(x=1.3, y=1.3, z=0.85),
             camera=dict(eye=dict(x=1.35, y=1.35, z=1.05),
                         center=dict(x=0, y=0, z=-0.18)),
